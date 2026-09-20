@@ -635,7 +635,7 @@ components:
       in: query
       name: device_id
       description: |
-        The entire credential: `droid-` plus 32 hex characters, client-generated and
+        The entire credential: `droid-` plus 32 UPPERCASE hex characters, client-generated and
         bound to the account by `/app/account/connect`. It never expires.
 
         Declared here as a query parameter because that is where it goes on GET and
@@ -701,8 +701,8 @@ components:
       description: Carried by every authenticated request, in whichever place the verb uses.
       required: [hardware_id, client_version, client_semver, flavor, device_type]
       properties:
-        device_id: { type: string, pattern: '^droid-[0-9a-f]{32}$' }
-        hardware_id: { type: string }
+        device_id: { type: string, pattern: '^droid-[0-9A-F]{32}$' }
+        hardware_id: { type: string, pattern: '^droid-[0-9a-f]{16}$' }
         client_version:
           type: string
           const: '8.1600'

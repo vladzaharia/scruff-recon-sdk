@@ -35,6 +35,7 @@ security-sensitive in its entirety.
 | Conversation ids | **There are none.** A thread is keyed by the peer's `profile_id`, and an inbox conversation's `id` field *is* that peer id. |
 | Ordering key | `version`, not `id` and not `created_at`. It is a dense, gap-free per-conversation sequence starting at 1. |
 | Message `guid` case | Outbound **UPPERCASE**, inbound **lowercase**. Always use `SameGUID`. A case-sensitive compare duplicates every message you send when it echoes back. |
+| Identifier case | `device_id` is **UPPERCASE** hex (203/203 captured), `hardware_id` is **lowercase** (219/219). Same prefix, opposite case. Getting it wrong fingerprints us; `TestIdentifierShapes` asserts both. |
 | `GET /app/chat` 404 | Means "no more messages" — the normal backfill terminator, not an error. `Chat` translates it to an empty page. |
 | `device_settings` | A **JSON-encoded string**, not an object. Decode it twice. |
 | `has_image` | An `int` photo *version*, despite reading like a boolean. |

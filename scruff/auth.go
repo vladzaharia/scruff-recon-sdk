@@ -46,18 +46,27 @@ const (
 // devicePrefix prefixes a generated device id.
 const devicePrefix = "droid-"
 
-// NewDeviceID generates a device id: "droid-" plus 32 hex characters.
+// NewDeviceID generates a device id: "droid-" plus 32 UPPERCASE hex characters.
 //
 // This is client-generated, not server-issued. Generate it once, bind it with
 // Connect, and persist it — it is the entire credential and never expires.
 //
-// The length matters. Captured traffic from the real app shows 32 hex
-// characters (38 total); an earlier implementation here emitted 40 (46 total),
-// which made our requests trivially distinguishable from the app's.
-func NewDeviceID() string { return devicePrefix + core.RandHex(16) }
+// Both the length and the case matter, and they differ from NewHardwareID:
+//
+//   - Length: captured traffic shows 32 hex characters (38 total); an earlier
+//     implementation here emitted 40 (46 total).
+//   - Case: UPPERCASE, in 203 of 203 captured device ids — while hardware_id is
+//     lowercase in 219 of 219. This mirrors the same split on message guids,
+//     where client-generated outbound values are uppercase. An earlier
+//     implementation emitted lowercase.
+//
+// Either mistake makes our requests trivially distinguishable from the app's.
+func NewDeviceID() string { return devicePrefix + strings.ToUpper(core.RandHex(16)) }
 
-// NewHardwareID generates a per-install identity: "droid-" plus 16 hex
-// characters.
+// NewHardwareID generates a per-install identity: "droid-" plus 16 lowercase
+// hex characters.
+//
+// Lowercase, unlike NewDeviceID — see the note there.
 //
 // NOT a UUID. An earlier implementation here used one, on the assumption that
 // a "hardware id" would be UUID-shaped; captured traffic shows the app sends

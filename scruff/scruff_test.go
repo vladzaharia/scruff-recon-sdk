@@ -96,9 +96,18 @@ func TestIdentifierShapes(t *testing.T) {
 	if !strings.HasPrefix(d, "droid-") || len(d) != 38 {
 		t.Errorf("device id = %q (%d chars), want droid- plus 32 hex = 38", d, len(d))
 	}
+	// Case is not cosmetic: device_id was UPPERCASE in 203 of 203 captured
+	// requests, while hardware_id was lowercase in 219 of 219. Emitting the
+	// wrong case is a fingerprint, so both directions are asserted.
+	if body := strings.TrimPrefix(d, "droid-"); body != strings.ToUpper(body) {
+		t.Errorf("device id body = %q, want UPPERCASE hex", body)
+	}
 	h := NewHardwareID()
 	if !strings.HasPrefix(h, "droid-") || len(h) != 22 {
 		t.Errorf("hardware id = %q (%d chars), want droid- plus 16 hex = 22", h, len(h))
+	}
+	if body := strings.TrimPrefix(h, "droid-"); body != strings.ToLower(body) {
+		t.Errorf("hardware id body = %q, want lowercase hex", body)
 	}
 	// Explicitly NOT a UUID — an earlier implementation used one.
 	if strings.Contains(h, "-") != strings.HasPrefix(h, "droid-") || strings.Count(h, "-") != 1 {
