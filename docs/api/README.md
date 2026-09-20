@@ -15,6 +15,10 @@ Machine-readable REST specs live in [`../openapi/`](../openapi/) — OpenAPI 3.1
 `redocly lint`-clean, covering 71 Recon paths and 55 SCRUFF paths. The raw
 reverse-engineering notes are in [`../research/`](../research/).
 
+**New to either API?** Start with [`getting-started.md`](./getting-started.md) — the
+required call order for each network, which is the part that is not guessable, plus the
+mistakes that cost the most time.
+
 ## What is covered
 
 Both references, and the Go clients beside them, cover **everything a member can do**.

@@ -575,15 +575,57 @@ func TestDispatchClassRouting(t *testing.T) {
 			},
 		},
 		{
-			name:  "unmodelled class surfaces rather than vanishing",
-			frame: `{"class":1300,"results":{}}`,
+			// A class the server invented and this SDK has never heard of must
+			// still reach the caller with its payload intact, rather than being
+			// dropped on the floor.
+			name:  "unknown class surfaces rather than vanishing",
+			frame: `{"class":9999,"results":{"a":1}}`,
 			check: func(t *testing.T, ev core.Event) {
 				u, ok := ev.(UnknownEvent)
 				if !ok {
 					t.Fatalf("event = %T, want UnknownEvent", ev)
 				}
-				if u.Class != 1300 {
-					t.Errorf("class = %d, want 1300", u.Class)
+				if u.Class != 9999 {
+					t.Errorf("class = %d, want 9999", u.Class)
+				}
+				if len(u.Payload) == 0 {
+					t.Error("payload dropped; it is the only thing we know about this class")
+				}
+			},
+		},
+		{
+			// A callback class confirms a request of yours and echoes its guid.
+			// Surfacing that as an ack is what lets a caller tell its own album
+			// creation apart from someone else's.
+			name:  "callback class becomes an ack carrying the request guid",
+			frame: `{"class":100,"request_guid":"g-1","results":{}}`,
+			check: func(t *testing.T, ev core.Event) {
+				a, ok := ev.(AckEvent)
+				if !ok {
+					t.Fatalf("event = %T, want AckEvent", ev)
+				}
+				if a.Class != ClassAlbumCreate {
+					t.Errorf("class = %d, want %d", a.Class, ClassAlbumCreate)
+				}
+				if a.Name != "AlbumCreate" {
+					t.Errorf("name = %q, want AlbumCreate", a.Name)
+				}
+				if a.Kind != ClassKindPost {
+					t.Errorf("kind = %q, want %q", a.Kind, ClassKindPost)
+				}
+				if a.RequestGUID != "g-1" {
+					t.Errorf("request guid = %q; without it an ack cannot be correlated", a.RequestGUID)
+				}
+			},
+		},
+		{
+			// Standard classes have no originating request, so an ack would be
+			// meaningless for them.
+			name:  "standard class does not become an ack",
+			frame: `{"class":1205,"results":{}}`,
+			check: func(t *testing.T, ev core.Event) {
+				if _, ok := ev.(AckEvent); ok {
+					t.Fatalf("Standard class %d became an AckEvent", 1205)
 				}
 			},
 		},
@@ -729,3 +771,30 @@ func readMixedParts(t *testing.T, r *http.Request) map[string]string {
 
 // hmacNew keeps the test's HMAC construction independent of the implementation.
 func hmacNew(key string) hash.Hash { return hmac.New(sha256.New, []byte(key)) }
+
+// The class table is the SDK's copy of docs/api/scruff-realtime.md section 4.
+// These pin the handful whose meaning is most often reported wrongly.
+func TestClassNameAndKind(t *testing.T) {
+	for _, tc := range []struct {
+		class int
+		name  string
+		kind  string
+	}{
+		// 208 and 209 are transposed in several public write-ups.
+		{ClassChatRecipientTyping, "ChatRecipientTyping", ClassKindStandard},
+		{ClassChatMessageViewed, "ChatMessageViewed", ClassKindStandard},
+		{ClassAlbumCreate, "AlbumCreate", ClassKindPost},
+		{ClassAlbumPermissionRevoke, "AlbumPermissionRevoke", ClassKindDelete},
+		{ClassWoof, "Woof", ClassKindStandard},
+	} {
+		if got := ClassName(tc.class); got != tc.name {
+			t.Errorf("ClassName(%d) = %q, want %q", tc.class, got, tc.name)
+		}
+		if got := ClassKind(tc.class); got != tc.kind {
+			t.Errorf("ClassKind(%d) = %q, want %q", tc.class, got, tc.kind)
+		}
+	}
+	if ClassName(9999) != "" || ClassKind(9999) != "" {
+		t.Error("an unknown class should report empty name and kind, not a guess")
+	}
+}

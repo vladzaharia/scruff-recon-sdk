@@ -86,9 +86,30 @@ type (
 		Class int
 	}
 
+	// AckEvent is the server confirming a write you made.
+	//
+	// Every non-Standard class is a callback for an originating request and
+	// echoes the request_guid that request carried, which is what makes
+	// correlation possible: issue a write, remember its guid, and match it here.
+	// Without that you cannot tell your own album creation from someone else's.
+	//
+	// Kind is ClassKindPost, Put or Delete, so a cache layer can decide what to
+	// invalidate without knowing the specific class.
+	AckEvent struct {
+		core.EventMarker
+		Class       int
+		Name        string // documented class name, e.g. "AlbumCreate"
+		Kind        string // ClassKindPost, ClassKindPut, ClassKindDelete
+		RequestGUID string // echoes the guid you sent; empty if the server omitted it
+		Payload     json.RawMessage
+	}
+
 	// UnknownEvent carries a class this package does not model, so callers can
-	// log it rather than silently dropping it. Around 80 classes exist that a
-	// messaging client has no use for.
+	// log it rather than silently dropping it.
+	//
+	// A class landing here is not an error — the server adds them — so the raw
+	// payload is preserved. Check ClassName first: a class may be *named*
+	// without being modelled as a typed event.
 	UnknownEvent struct {
 		core.EventMarker
 		Class   int
@@ -357,6 +378,21 @@ func (r *Realtime) dispatch(plain []byte, on func(core.Event)) {
 		on(SocialEvent{Class: env.Class})
 
 	default:
+		// A callback class confirms a request. Surfacing it as an ack, with the
+		// request guid, lets a caller correlate it with the write it made —
+		// which is the difference between "an album was created" and "MY album
+		// was created". Standard classes have no originating request, so they
+		// stay UnknownEvent.
+		if kind := ClassKind(env.Class); kind != "" && kind != ClassKindStandard {
+			on(AckEvent{
+				Class:       env.Class,
+				Name:        ClassName(env.Class),
+				Kind:        kind,
+				RequestGUID: reqGUID,
+				Payload:     body,
+			})
+			return
+		}
 		on(UnknownEvent{Class: env.Class, Payload: body})
 	}
 }

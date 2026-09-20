@@ -55,6 +55,11 @@ info:
     url: https://github.com/vladzaharia/scruff-recon-sdk
 
 externalDocs:
+  description: |
+    Getting started (required call order) and the full prose reference
+  url: https://github.com/vladzaharia/scruff-recon-sdk/blob/main/docs/api/getting-started.md
+
+x-prose-reference:
   description: Prose reference, including everything not modelled here
   url: https://github.com/vladzaharia/scruff-recon-sdk/blob/main/docs/api/scruff.md
 

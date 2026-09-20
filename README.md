@@ -42,8 +42,10 @@ account. Every endpoint carries a provenance tag saying how it was established.
 | **Recon** | [`recon.md`](docs/api/recon.md) | [SignalR](docs/api/recon-realtime.md) | [`recon-enums.md`](docs/api/recon-enums.md) |
 | **SCRUFF** | [`scruff.md`](docs/api/scruff.md) | [encrypted WebSocket](docs/api/scruff-realtime.md) | [`scruff-enums.md`](docs/api/scruff-enums.md) |
 
-Start at [`docs/api/README.md`](docs/api/README.md), which has an at-a-glance comparison
-and the eight traps that cost the most debugging time. There are also OpenAPI 3.1 specs
+New to either API? **[`docs/api/getting-started.md`](docs/api/getting-started.md)** walks
+the required call order for each network — the part that is not guessable — in Go and in
+the abstract. Then [`docs/api/README.md`](docs/api/README.md) has an at-a-glance
+comparison and the traps that cost the most debugging time. There are also OpenAPI 3.1 specs
 for the REST surface in [`docs/openapi/`](docs/openapi/) — REST only, since neither
 SignalR nor an AES-framed socket is expressible in OpenAPI.
 
