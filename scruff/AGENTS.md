@@ -1,7 +1,7 @@
 # AGENTS.md — sdk/scruff
 
 Go client for the SCRUFF app API. Protocol reference:
-[`docs/api/scruff.md`](../../docs/api/scruff.md).
+[`docs/api/scruff.md`](../docs/api/scruff.md).
 
 ## Read this before touching the signing code
 
@@ -55,7 +55,7 @@ There is **no error envelope** — a rejected request has an empty body. SCRUFF 
 defines a custom **420–452 status vocabulary**, and the same code means different things
 on different endpoints (`403` alone is "blocked by peer", "album not empty", "Pro cap
 reached", and "wrong password"). Interpret status codes **per endpoint**; see
-[`docs/api/scruff.md §1.5`](../../docs/api/scruff.md#15-errors-client).
+[`docs/api/scruff.md §1.5`](../docs/api/scruff.md#15-errors-client).
 
 Three endpoints do return a parseable body: `430` banned terms, `406` max hashtags, and
 the `401` from anonymous register (which is a config payload, not an error).

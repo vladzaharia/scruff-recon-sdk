@@ -1,0 +1,139 @@
+# Security note: this workflow interpolates only trusted values — matrix entries
+# defined below, `env.GO_VERSION`, and `secrets.GITHUB_TOKEN`. No `run:` step
+# interpolates `github.event.*` data, so there is no workflow-injection surface.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  modules:
+    name: ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [core, recon, scruff]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Unit tests must never reach the network. The integration tests that do
+      # are behind the `integration` build tag and are not run here.
+      - name: Test
+        run: go test -race ./...
+
+      - name: Integration tests compile
+        run: go vet -tags integration ./...
+
+  stdlib-only:
+    name: core is stdlib-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # core's dependency-free-ness is a promise this repo makes to consumers,
+      # so it is enforced rather than documented. Asserting on go.mod's require
+      # block is the precise form of that promise: `go list -deps` also reports
+      # the toolchain's own vendored stdlib (vendor/golang.org/x/...), and
+      # `go list -m all` reports every module in the workspace.
+      - name: Assert core has no requires
+        working-directory: core
+        run: |
+          req=$(go mod edit -json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Require") or "")')
+          if [ -n "$req" ]; then
+            echo "::error::core gained a dependency:"; echo "$req"; exit 1
+          fi
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans history, not just the tip
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docs:
+    name: docs links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Renaming a heading silently breaks every link to it — and adding a
+      # provenance tag to a heading changes its anchor, which is easy to miss.
+      - name: Check internal links and anchors
+        run: |
+          python3 - <<'PY'
+          import glob, os, re, sys
+
+          def slug(h):
+              s = re.sub(r'`', '', h.strip().lower())
+              s = re.sub(r'[^\w\s-]', '', s)
+              return s.replace(' ', '-')
+
+          files = sorted(set(glob.glob('**/*.md', recursive=True)))
+          anchors = {
+              os.path.normpath(f): {
+                  slug(m.group(2))
+                  for m in (re.match(r'^(#{1,6})\s+(.*)', l) for l in open(f))
+                  if m
+              }
+              for f in files
+          }
+
+          bad = []
+          for f in files:
+              d = os.path.dirname(f)
+              for m in re.finditer(r'\]\(([^)\s]+)\)', open(f).read()):
+                  link = m.group(1)
+                  if link.startswith(('http', 'mailto:', '#!')) or link == 'url':
+                      continue
+                  path, _, anc = link.partition('#')
+                  tgt = os.path.normpath(os.path.join(d, path)) if path else os.path.normpath(f)
+                  if path and not os.path.exists(tgt):
+                      bad.append(f'{f} -> {link} (missing file)')
+                      continue
+                  if anc and anc not in anchors.get(tgt, set()):
+                      bad.append(f'{f} -> {link} (missing anchor)')
+
+          for b in bad:
+              print(f'::error::{b}')
+          sys.exit(1 if bad else 0)
+          PY

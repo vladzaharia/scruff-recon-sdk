@@ -182,7 +182,7 @@ func addRegisterParams(r *core.Request, s Session, loc LatLng) {
 
 	set("aes256_key", s.AES256Key)
 	set("aes256_iv", s.AES256IV)
-	set("device_name", "beeper-connectors")
+	set("device_name", "scruff-recon-sdk")
 	set("system_name", "Android")
 	set("device_os_version", "34")
 	set("system_version", "34")

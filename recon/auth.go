@@ -39,7 +39,7 @@ const (
 
 // DefaultUserAgent identifies this client honestly. Recon records it as the
 // device description, so it is visible in the account's session list.
-var DefaultUserAgent = "beeper-connectors-recon/0.1 (+https://github.com/vladzaharia/beeper-connectors)"
+var DefaultUserAgent = "recon-sdk-go/0.1 (+https://github.com/vladzaharia/scruff-recon-sdk)"
 
 // stripBearer removes a redundant "Bearer " prefix.
 //
@@ -70,7 +70,7 @@ func CreateAppInstallation(ctx context.Context, opts ...Option) (*AppInstallatio
 			"deviceTypeId":   DeviceTypeWeb,
 			"appVersion":     AppVersion,
 			"userAgent":      cfg.userAgent,
-			"description":    "beeper-connectors",
+			"description":    "scruff-recon-sdk",
 			"isInstalledPwa": false,
 		},
 	}, &out)

@@ -25,15 +25,11 @@ SOFTWARE.
 TRADEMARK NOTICE
 
 The MIT grant above covers the source code and documentation in this
-repository. It does NOT cover the third-party trademarks and logo artwork
-bundled here for bridge branding:
-
-    assets/recon-logo.png
-    assets/scruff-logo.png
-    recon/pkg/connector/logo.png
-    scruff/pkg/connector/logo.png
+repository. It does NOT grant any right in the third-party trademarks named
+throughout them.
 
 "Recon" is a trademark of its respective owner. "SCRUFF" is a trademark of
-Perry Street Software, Inc. These marks are used here only to identify the
-networks each connector bridges. Neither owner is affiliated with, endorses,
-or sponsors this project.
+Perry Street Software, Inc. These marks appear here only to identify the
+networks whose protocols are documented, as nominative fair use. Neither owner
+is affiliated with, endorses, or sponsors this project, and neither has
+authorised or reviewed this work.

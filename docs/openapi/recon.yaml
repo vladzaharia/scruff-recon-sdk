@@ -35,12 +35,12 @@ info:
     name: MIT
     identifier: MIT
   contact:
-    name: beeper-connectors
-    url: https://github.com/vladzaharia/beeper-connectors
+    name: scruff-recon-sdk
+    url: https://github.com/vladzaharia/scruff-recon-sdk
 
 externalDocs:
   description: Prose reference, including everything not modelled here
-  url: https://github.com/vladzaharia/beeper-connectors/blob/main/docs/api/recon.md
+  url: https://github.com/vladzaharia/scruff-recon-sdk/blob/main/docs/api/recon.md
 
 servers:
   - url: https://www.recon.com/api

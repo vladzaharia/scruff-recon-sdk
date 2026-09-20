@@ -7,7 +7,7 @@ documentation.
 **Sources.** Decompilation of the Android app v8.16.0 (`client_semver 8.16.0`,
 `client_version 8.1600`, `build 169074`, OkHttp 5.3.2) with `jadx`, plus three mitmproxy
 captures of the author's own account taken through an Android 14 emulator with TLS trust
-and OkHttp pinning bypassed via Frida. Capture rig: [`../../tools/scruff-capture/`](../../tools/scruff-capture/).
+and OkHttp pinning bypassed via Frida.
 Raw decompilation notes: [`../research/scruff-apk-decomposition.md`](../research/scruff-apk-decomposition.md).
 
 **Companion documents**

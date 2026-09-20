@@ -1,0 +1,19 @@
+# --- Build output ---------------------------------------------------------
+/bin/
+/dist/
+
+# --- Credentials ----------------------------------------------------------
+# Integration tests read credentials.env. It must never be committed.
+*.env
+credentials.env
+
+# --- Reverse-engineering artifacts ----------------------------------------
+# Captures contain live tokens, device ids and third-party personal data.
+/captures/
+*.flow
+*.har
+*.apk
+
+# --- Local tooling --------------------------------------------------------
+/.claude/settings.local.json
+.DS_Store

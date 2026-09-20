@@ -1,7 +1,7 @@
 # AGENTS.md — sdk/recon
 
 Go client for the Recon (recon.com) v3 API. Protocol reference:
-[`docs/api/recon.md`](../../docs/api/recon.md).
+[`docs/api/recon.md`](../docs/api/recon.md).
 
 ## Read this before touching the auth code
 
