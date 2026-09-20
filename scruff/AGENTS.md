@@ -87,6 +87,16 @@ whole point is that the failure is visible.
 
 - Log anything, and especially not `device_id`, `aes256_key`, `socket.pwd`, or the
   `suggested_email` the anonymous bootstrap returns (it is a real Google address).
-- Add write methods for woofs, blocks, reports, or RSVPs without a clear reason. They are
-  documented but deliberately not implemented: they are visible to other people and not
-  undoable.
+- Add moderator or administrator surface. `trials/admin_*`, `boost/grant` and the
+  verification/anti-fraud flows (`face_liveness`, `sms/send`, `captcha`) are documented
+  but deliberately not implemented: they are not things a member does.
+- Add bulk or looping helpers over the person-affecting writes. Woofs, favorites, blocks,
+  looks and album shares are implemented, but one call per deliberate human action. The
+  app enforces its own caps here (`limit_add_favorite_user` 80,
+  `limit_hide_block_user_v2` 150) precisely because this surface is abusable.
+- Call `UnblockAll`, or send `DELETE /app/block` with no parameters, unless the user
+  explicitly asked to clear every block. `Unblock("")` deliberately errors rather than
+  falling through to that.
+- Exercise any write against a live account casually. The writes here are `[client]`-
+  derived and have never been sent to the real API; the unit tests assert the request we
+  build, which is the part we actually know.

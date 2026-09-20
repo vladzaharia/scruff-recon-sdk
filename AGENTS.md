@@ -50,6 +50,10 @@ module, so consumers resolve the tagged version while a fresh clone still builds
 4. **`core` stays stdlib-only.** Its `go.mod` has no `require` block.
 5. **Nothing derived from a live account gets committed.** Captures hold real tokens and
    third-party personal data. Fixtures are hand-written or heavily redacted.
+6. **Write paths are `[client]`-derived and unverified.** Almost nothing that mutates has
+   been sent to a real API. Tests therefore assert the *request we construct* — the part
+   we actually know — rather than server behaviour we have not seen. Do not "fix" a write
+   to match a guess about the response; if you observe one, record it and update the tag.
 
 ## Documentation conventions
 
@@ -85,8 +89,13 @@ wasted time:
 This exists for interoperability — talking to your own accounts — and for documenting
 protocols that have no public specification. Keep it that way:
 
-- Implement read and self-scoped operations freely. Be deliberate about anything that
-  contacts, notifies, or affects another person.
+- The line is **member, not moderator**. Everything a user can do is in scope: messaging,
+  profile editing, woofs/cruises, favorites, blocks, follows, RSVPs, albums, moments.
+  Administrator and anti-fraud surface is not — Recon's payment and verification services
+  and its `dvrt/admin` paths, SCRUFF's `trials/admin_*`, `boost/grant`, `face_liveness`,
+  `sms/send` and `captcha`. Those stay documented and unimplemented.
+- Be deliberate about anything that contacts, notifies, or affects another person. Those
+  calls exist, but one per deliberate human action — never in a loop over a grid page.
 - Respect the networks' rate expectations. `scruff` mirrors the app's own throttle for
   this reason; keep it on.
 - Don't add scraping helpers, bulk enumeration, or anything whose primary use is

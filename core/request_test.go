@@ -194,3 +194,43 @@ func TestBuildSetsContentType(t *testing.T) {
 		})
 	}
 }
+
+// Set replaces, Add appends. Both APIs use repeated keys for list-valued
+// parameters, and using Set for those silently keeps only the last value —
+// which looks like success while doing a fraction of the work.
+func TestAddQueryAndAddFormAppend(t *testing.T) {
+	var r Request
+	r.SetQuery("a", "1")
+	r.SetQuery("a", "2")
+	if got := r.Query["a"]; len(got) != 1 || got[0] != "2" {
+		t.Errorf("SetQuery twice = %v, want it to replace", got)
+	}
+
+	r.AddQuery("ids[]", "x")
+	r.AddQuery("ids[]", "y")
+	if got := r.Query["ids[]"]; len(got) != 2 || got[0] != "x" || got[1] != "y" {
+		t.Errorf("AddQuery = %v, want both values kept", got)
+	}
+
+	var f Request
+	f.AddForm("ids[]", "x")
+	f.AddForm("ids[]", "y")
+	if got := f.Form["ids[]"]; len(got) != 2 {
+		t.Errorf("AddForm = %v, want both values kept", got)
+	}
+}
+
+// HasParam must see values added via the appending setters too, or the SCRUFF
+// authenticator would add a duplicate identity parameter.
+func TestHasParamSeesAddedValues(t *testing.T) {
+	var r Request
+	r.AddQuery("request_guid", "g")
+	if !r.HasParam("request_guid") {
+		t.Error("HasParam missed a value added with AddQuery")
+	}
+	var f Request
+	f.AddForm("request_guid", "g")
+	if !f.HasParam("request_guid") {
+		t.Error("HasParam missed a value added with AddForm")
+	}
+}

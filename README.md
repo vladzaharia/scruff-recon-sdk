@@ -13,6 +13,18 @@ Two things live here, and you can take either on its own:
 | 📘 **[Protocol references](docs/api/)** | ~5,000 lines documenting both APIs in their entirety — messaging, profile grids, private albums, moments, social graph, media, realtime. Language-agnostic; useful even if you never write Go. |
 | 📦 **Go SDKs** | [`recon`](recon/) and [`scruff`](scruff/), standalone modules over a shared [`core`](core/). No Matrix, no mautrix, no heavy dependency tree. |
 
+The clients cover **everything a member can do** — messaging and media, profile editing,
+the discovery grids, woofs/cruises, favorites, blocks, follows and friend requests,
+private albums, moments, events and travel. Administrator and anti-fraud surface
+(payment, identity verification, `trials/admin_*`) is documented but deliberately not
+implemented.
+
+> [!NOTE]
+> Most **write** paths are `[client]`-derived: read from the official clients, never sent
+> to the live API by this project. They are unit-tested against the request they build,
+> which is the part that is actually known. Treat a surprising response as new
+> information about the API rather than as a bug, and please report it.
+
 > [!IMPORTANT]
 > **Personal interoperability only.** These clients access *your own* account through an
 > unofficial client, which the networks' terms may prohibit. There is no affiliation with

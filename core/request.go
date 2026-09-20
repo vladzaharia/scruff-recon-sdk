@@ -70,12 +70,32 @@ func (r *Request) SetQuery(key, value string) {
 	r.Query.Set(key, value)
 }
 
+// AddQuery appends a query parameter, keeping any existing values.
+//
+// Distinct from SetQuery, which replaces. Both APIs use repeated keys for
+// list-valued parameters — SCRUFF's target_ids[] and full_size_constraints[]
+// among them — and Set would silently keep only the last value.
+func (r *Request) AddQuery(key, value string) {
+	if r.Query == nil {
+		r.Query = url.Values{}
+	}
+	r.Query.Add(key, value)
+}
+
 // SetForm sets a form field, allocating Form if needed.
 func (r *Request) SetForm(key, value string) {
 	if r.Form == nil {
 		r.Form = url.Values{}
 	}
 	r.Form.Set(key, value)
+}
+
+// AddForm appends a form field, keeping any existing values. See AddQuery.
+func (r *Request) AddForm(key, value string) {
+	if r.Form == nil {
+		r.Form = url.Values{}
+	}
+	r.Form.Add(key, value)
 }
 
 // AddPart appends a plain multipart field.
