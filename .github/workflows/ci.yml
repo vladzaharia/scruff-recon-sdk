@@ -77,6 +77,42 @@ jobs:
             echo "::error::core gained a dependency:"; echo "$req"; exit 1
           fi
 
+  consumer:
+    name: builds as a consumer sees it
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # recon and scruff carry `replace core => ../core`, which Go applies only
+      # from the main module. That makes local builds resolve core from the
+      # working tree while consumers resolve the *required version* -- so a
+      # stale require silently passes here and fails for everyone else. It did:
+      # v0.2.0 shipped using core.AddQuery while requiring a core that predated
+      # it. Dropping the replace reproduces the consumer's view.
+      #
+      # If the required core version is not tagged yet, that is the normal state
+      # between "core gains a symbol" and "core is tagged", so warn rather than
+      # fail. A version that resolves but does not compile is a real break.
+      - name: Build against the required core version
+        run: |
+          for m in recon scruff; do
+            ( cd "$m"
+              go mod edit -dropreplace=github.com/vladzaharia/scruff-recon-sdk/core
+              if ! go mod download github.com/vladzaharia/scruff-recon-sdk/core 2>/dev/null; then
+                echo "::warning::$m requires a core version that is not published yet; skipping"
+                exit 0
+              fi
+              if ! go build ./...; then
+                echo "::error::$m does not compile against the core version it requires"
+                exit 1
+              fi
+            ) || exit 1
+          done
+
   secrets:
     name: secret scan
     runs-on: ubuntu-latest
