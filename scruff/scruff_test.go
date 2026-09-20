@@ -88,10 +88,21 @@ func TestLatLngStringsUnknownIsZeroPointZero(t *testing.T) {
 	}
 }
 
+// Shapes are asserted against captured traffic from the real app. Getting them
+// wrong does not fail loudly — the server accepts other lengths — it just makes
+// our requests trivially distinguishable from the app's.
 func TestIdentifierShapes(t *testing.T) {
 	d := NewDeviceID()
-	if !strings.HasPrefix(d, "droid-") || len(d) != len("droid-")+40 {
-		t.Errorf("device id = %q, want droid- plus 40 hex", d)
+	if !strings.HasPrefix(d, "droid-") || len(d) != 38 {
+		t.Errorf("device id = %q (%d chars), want droid- plus 32 hex = 38", d, len(d))
+	}
+	h := NewHardwareID()
+	if !strings.HasPrefix(h, "droid-") || len(h) != 22 {
+		t.Errorf("hardware id = %q (%d chars), want droid- plus 16 hex = 22", h, len(h))
+	}
+	// Explicitly NOT a UUID — an earlier implementation used one.
+	if strings.Contains(h, "-") != strings.HasPrefix(h, "droid-") || strings.Count(h, "-") != 1 {
+		t.Errorf("hardware id = %q, want a single droid- prefix and no UUID dashes", h)
 	}
 	g := NewMessageGUID()
 	if len(g) != 32 || g != strings.ToUpper(g) {

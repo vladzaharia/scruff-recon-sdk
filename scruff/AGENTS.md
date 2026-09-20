@@ -61,9 +61,15 @@ the `401` from anonymous register (which is a config payload, not an error).
 
 ## Rate limiting
 
-The **server never rate-limits** in any capture — no 429, no headers. `DefaultLimiter`
-mirrors the per-path token buckets the *app* enforces on itself, so we behave like the
-real client. Keep it on unless a test needs it off.
+The server **does** rate-limit. No 429 appears in the captures, but one has since been
+observed: an opaque `429 Too Many Requests (Rate Limit Exceeded)` with **no `Retry-After`
+and no `RateLimit-*` headers**, applied even to the anonymous `register` call — so it is
+not per-account, and most likely keyed on source address.
+
+There is therefore no advertised window to obey and no correct backoff to compute.
+`DefaultLimiter` mirrors the per-path token buckets the *app* enforces on itself, which is
+the best available proxy for "behave like the real client". **Keep it on** unless a test
+needs it off, and do not add retry-on-429 — retrying an opaque block just extends it.
 
 ## Testing
 

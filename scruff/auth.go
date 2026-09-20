@@ -46,14 +46,27 @@ const (
 // devicePrefix prefixes a generated device id.
 const devicePrefix = "droid-"
 
-// NewDeviceID generates a device id: "droid-" plus 40 hex characters.
+// NewDeviceID generates a device id: "droid-" plus 32 hex characters.
 //
 // This is client-generated, not server-issued. Generate it once, bind it with
 // Connect, and persist it — it is the entire credential and never expires.
-func NewDeviceID() string { return devicePrefix + core.RandHex(20) }
+//
+// The length matters. Captured traffic from the real app shows 32 hex
+// characters (38 total); an earlier implementation here emitted 40 (46 total),
+// which made our requests trivially distinguishable from the app's.
+func NewDeviceID() string { return devicePrefix + core.RandHex(16) }
 
-// NewHardwareID generates a per-install identity.
-func NewHardwareID() string { return core.NewUUID() }
+// NewHardwareID generates a per-install identity: "droid-" plus 16 hex
+// characters.
+//
+// NOT a UUID. An earlier implementation here used one, on the assumption that
+// a "hardware id" would be UUID-shaped; captured traffic shows the app sends
+// droid-<16 hex> (22 characters), the same prefix as the device id.
+//
+// The app derives this from the Android id rather than randomly, and suppresses
+// it entirely when that would be droid-null or droid-000000000000000. We have
+// no Android id, so a random value of the right shape is the closest we get.
+func NewHardwareID() string { return devicePrefix + core.RandHex(8) }
 
 // NewAESMaterial generates the realtime key and IV, 32 hex characters each.
 //

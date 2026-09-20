@@ -75,9 +75,10 @@ func WithRateLimit(l *core.Limiter) Option { return func(c *config) { c.limiter 
 
 // DefaultLimiter mirrors the per-path token buckets the app enforces on itself.
 //
-// The server was never observed rate-limiting — no 429, no RateLimit header, in
-// any capture — so this is about behaving like the real client rather than
-// obeying an advertised limit.
+// The server DOES rate-limit, with an opaque 429 carrying no Retry-After and no
+// RateLimit headers, and it is not per-account — an anonymous register gets the
+// same treatment. Since there is no advertised window to obey, the best we can
+// do is behave like the real client, which is what these buckets are.
 func DefaultLimiter() *core.Limiter {
 	return &core.Limiter{
 		Buckets: map[string]core.Bucket{
