@@ -11,11 +11,26 @@ info:
 
     ## Scope
 
-    This document covers **authentication, inbox and chat, profiles, media, the profile
-    grid, and albums** — the endpoints with verified schemas. The full API is roughly 90
-    endpoints across 16 feature areas, including moments, venues, the store, and
-    verification; those are documented in prose in
-    [`../api/scruff.md`](../api/scruff.md) but are deliberately not modelled here.
+    This document covers **everything a member can do**: authentication, inbox and chat,
+    profiles and profile editing, the profile grid and discovery, private albums and
+    sharing, woofs and looks, favorites and folders, blocks and hides, moments, and
+    SCRUFF Venture (events, cities, travel).
+
+    Two areas are deliberately **not** modelled, and are described in prose in
+    [`../api/scruff.md`](../api/scruff.md) instead:
+
+    - **Administrator surface**: `trials/admin_*`, `boost/grant`.
+    - **Anti-fraud and onboarding**: `face_liveness`, `sms/send`, `captcha`. These exist
+      to establish that a human controls an account, so driving them from an unofficial
+      client is not a use this project supports.
+
+    ## Confidence
+
+    Provenance is per-endpoint in the prose reference. Broadly, the inbox, chat, profile
+    and grid **reads** are `[observed]` — seen on the wire — while most **writes** are
+    `[client]`: read from the Android app, which makes the paths and parameters
+    authoritative, but they have **not been exercised against the live API** by this
+    project. Treat a surprising response as new information rather than a defect here.
 
     ## Things this specification cannot express
 
@@ -62,7 +77,17 @@ tags:
   - name: grid
     description: Profile grids. One request shape, 23 paths.
   - name: albums
-    description: Private albums.
+    description: Private albums, their contents, and sharing.
+  - name: social
+    description: |
+      Woofs, looks, favorites, blocks and hides. Everything here is visible to another
+      person and mostly not undoable.
+  - name: discovery
+    description: Discover stacks, recommendations, and alerts.
+  - name: moments
+    description: Ephemeral stories.
+  - name: venture
+    description: SCRUFF Venture — events, cities, and travel plans.
 
 paths:
   /app/account/register:
@@ -285,8 +310,8 @@ paths:
                     request_guid: { type: string, description: Equal to `guid` on a send. }
                     message_type: { $ref: '#/components/schemas/MessageType' }
                     location: { type: string }
-                    reaction: { type: string, description: Emoji, for type 8. }
-                    reacted_to: { type: string, description: Target guid, for type 8. }
+                    reaction: { type: string, description: 'Emoji, for type 8.' }
+                    reacted_to: { type: string, description: 'Target guid, for type 8.' }
                     message: { type: string }
                     album_image_id: { type: string }
                     video_filename: { type: string }
@@ -412,7 +437,7 @@ paths:
         - $ref: '#/components/parameters/identityQuery'
         - { name: guid, in: query, required: true, schema: { type: string } }
         - { name: message_type, in: query, required: true, schema: { $ref: '#/components/schemas/MessageType' } }
-        - { name: media_type, in: query, required: true, schema: { type: integer, enum: [0, 1] }, description: 0 image, 1 video. }
+        - { name: media_type, in: query, required: true, schema: { type: integer, enum: [0, 1] }, description: '0 image, 1 video.' }
         - { name: sender_id, in: query, required: true, schema: { type: integer } }
         - { name: recipient_id, in: query, required: true, schema: { type: integer } }
         - { name: version, in: query, required: true, schema: { type: integer } }
@@ -513,7 +538,7 @@ paths:
         Unrelated to `POST /app/location`, which publishes your position.
       parameters:
         - $ref: '#/components/parameters/identityQuery'
-        - { name: query_sort_type, in: query, required: true, schema: { type: integer, enum: [0, 1, 2, 3] }, description: 0 distance, 1 time, 2 online, 3 distance+newness. }
+        - { name: query_sort_type, in: query, required: true, schema: { type: integer, enum: [0, 1, 2, 3] }, description: '0 distance, 1 time, 2 online, 3 distance+newness.' }
         - { name: offset, in: query, required: true, schema: { type: integer } }
         - { name: latitude, in: query, required: true, schema: { type: string } }
         - { name: longitude, in: query, required: true, schema: { type: string } }
@@ -628,6 +653,1031 @@ paths:
                   album_version: { type: string }
         default: { $ref: '#/components/responses/StatusOnlyError' }
 
+  /app/poke:
+    post:
+      tags: [social]
+      summary: Send a woof
+      description: |
+        **Notifies the recipient and cannot be withdrawn.** Echoed on the realtime socket
+        as class 1.
+
+        `moment_id` is optional and attributes the woof to one of their moments.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [recipient]
+                  properties:
+                    recipient: { type: string }
+                    moment_id: { type: string }
+      responses:
+        '200': { description: Sent }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/profile/view:
+    post:
+      tags: [social]
+      summary: Record a look at a profile
+      description: |
+        Puts you in the target's "viewed you" grid. **Fetching a profile with
+        `GET /app/profile` does not do this** — the look is a separate, explicit act.
+        Suppressed when your account has `stealth` set.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [target]
+                  properties:
+                    target: { type: string }
+      responses:
+        '200': { description: Recorded }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/favorite:
+    get:
+      tags: [grid]
+      summary: List your favorites
+      description: A standard grid. See `GET /app/location` for the shared request shape.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    post:
+      tags: [social]
+      summary: Add a favorite
+      description: |
+        Capped by the app's own `limit_add_favorite_user` (80), enforced client-side.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [recipient]
+                  properties:
+                    recipient: { type: string }
+                    folder_id: { type: string }
+                    limit: { type: integer }
+      responses:
+        '200': { description: Added }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    put:
+      tags: [social]
+      summary: Set which folders a favorite belongs to
+      description: |
+        A replace, not a merge: folders omitted from `folder_ids[]` are removed. The
+        parameter is a **repeated key**, not a single joined value.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [target_id]
+                  properties:
+                    target_id: { type: string }
+                    'folder_ids[]':
+                      type: array
+                      items: { type: string }
+                    limit: { type: integer }
+      responses:
+        '200': { description: Updated }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [social]
+      summary: Remove a favorite
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: recipient, in: query, required: true, schema: { type: string } }
+        - { name: folder_id, in: query, schema: { type: string }, description: Remove from one folder only. }
+      responses:
+        '200': { description: Removed }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/favorite/folders:
+    get:
+      tags: [social]
+      summary: List favorite folders
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+      responses:
+        '200':
+          description: Folders
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/FavoriteFolder' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    post:
+      tags: [social]
+      summary: Create a favorite folder
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [name]
+                  properties:
+                    name: { type: string }
+      responses:
+        '200': { description: Created }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    put:
+      tags: [social]
+      summary: Rename a favorite folder
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [folder_id, name]
+                  properties:
+                    folder_id: { type: string }
+                    name: { type: string }
+      responses:
+        '200': { description: Renamed }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [social]
+      summary: Delete a favorite folder
+      description: The favorites inside it are not deleted.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: folder_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/block:
+    get:
+      tags: [grid]
+      summary: List blocked and hidden profiles
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    post:
+      tags: [social]
+      summary: Block or hide a profile
+      description: |
+        One endpoint for two different actions, separated only by `hide`, and the
+        polarity is counterintuitive:
+
+        - `hide=true` — **hides** them from your grids. They can still contact you.
+        - `hide=false` — **blocks** them.
+
+        Inverting this blocks someone the user only meant to hide. Capped by the app's
+        own `limit_hide_block_user_v2` (150).
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [recipient, hide]
+                  properties:
+                    recipient: { type: string }
+                    hide: { type: boolean }
+                    limit: { type: integer }
+      responses:
+        '200': { description: Blocked or hidden }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [social]
+      summary: Unblock one, several, or ALL profiles
+      description: |
+        ⚠️ **With no parameters this deletes every block on the account.** That is the
+        documented behaviour, not a quirk of some clients, and it is irreversible. Always
+        send `target_id` (one) or `target_ids[]` (several) unless clearing everything is
+        genuinely what the user asked for.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: target_id, in: query, schema: { type: string }, description: Unblock one profile. }
+        - name: 'target_ids[]'
+          in: query
+          schema: { type: array, items: { type: string } }
+          description: Unblock several. Repeated key.
+      responses:
+        '200': { description: Unblocked }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/woofs/{woofDirection}:
+    get:
+      tags: [grid]
+      summary: Woofs received or sent
+      parameters:
+        - name: woofDirection
+          in: path
+          required: true
+          schema: { type: string, enum: [incoming, outgoing] }
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/viewers/{viewerDirection}:
+    get:
+      tags: [grid]
+      summary: Profiles that viewed you, or that you viewed
+      parameters:
+        - name: viewerDirection
+          in: path
+          required: true
+          schema: { type: string, enum: [incoming, outgoing] }
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/albums/received:
+    get:
+      tags: [albums]
+      summary: Albums other people have shared with you
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/albums/permissions:
+    get:
+      tags: [albums]
+      summary: Profiles you have unlocked an album for
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [albums]
+      summary: Revoke album access
+      description: |
+        There is **no POST counterpart** in 8.16.0. Sharing happens implicitly by sending
+        a chat message of `message_type=12` carrying `shared_album_id` and
+        `album_share_limit`. The endpoint exists server-side — socket class 103 maps to
+        it — but the app never calls it.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: album_id, in: query, required: true, schema: { type: string } }
+        - name: 'target_ids[]'
+          in: query
+          required: true
+          schema: { type: array, items: { type: string } }
+          description: Repeated key, one per profile.
+      responses:
+        '200': { description: Revoked }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/albums/cross_user_archive:
+    post:
+      tags: [albums]
+      summary: Save an image from someone else's shared album
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [album_id, image_id]
+                  properties:
+                    album_id: { type: string }
+                    image_id: { type: string }
+      responses:
+        '200': { description: Saved }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/profile/note:
+    post:
+      tags: [profile]
+      summary: Store a private note about another profile
+      description: Visible only to you.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [target_id, note]
+                  properties:
+                    target_id: { type: string }
+                    note: { type: string }
+      responses:
+        '200': { description: Saved }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/profile/hashtag:
+    post:
+      tags: [profile]
+      summary: Add a hashtag to your profile
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [hashtag]
+                  properties:
+                    hashtag: { type: string }
+      responses:
+        '200': { description: Added }
+        '406':
+          description: Too many hashtags. Body carries `max_hashtags`.
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [profile]
+      summary: Remove a hashtag
+      description: Removed by **id**, not by text, unlike adding.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: hashtag_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Removed }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/profile/popular_hashtags:
+    get:
+      tags: [profile]
+      summary: Hashtag autocomplete
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: query, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Suggestions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    hashtag: { type: string }
+                    count: { type: integer }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/profile/genders:
+    get:
+      tags: [profile]
+      summary: Selectable gender identities
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+      responses:
+        '200':
+          description: Options
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/NamedOption' }
+                  pinned_count: { type: integer }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/profile/pronouns:
+    get:
+      tags: [profile]
+      summary: Selectable pronoun sets
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+      responses:
+        '200':
+          description: Options
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/NamedOption' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/profile/stats:
+    get:
+      tags: [profile]
+      summary: Profile Insights
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: profile_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Stats
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/profile/photo:
+    post:
+      tags: [profile]
+      summary: Upload a profile photo
+      description: |
+        Three file parts for one photo: `original`, `image` and `thumbnail`. The crop
+        fields describe how `image` was derived from `original`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [request_guid, photo_index]
+              properties:
+                request_guid: { type: string }
+                photo_index: { type: integer }
+                original: { type: string, format: binary }
+                image: { type: string, format: binary }
+                thumbnail: { type: string, format: binary }
+                crop_top: { type: number }
+                crop_left: { type: number }
+                crop_bottom: { type: number }
+                crop_right: { type: number }
+                crop_x_center_offset_pct: { type: number }
+                crop_y_center_offset_pct: { type: number }
+                crop_height_pct: { type: number }
+                system_cropped_thumbnail: { type: boolean }
+      responses:
+        '200': { description: Uploaded }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    put:
+      tags: [profile]
+      summary: Reorder profile photos
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [from, to]
+                  properties:
+                    from: { type: integer }
+                    to: { type: integer }
+      responses:
+        '200': { description: Reordered }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [profile]
+      summary: Delete a profile photo
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: photo_index, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Deleted }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/discover:
+    get:
+      tags: [discovery]
+      summary: Ranked profile stacks
+      description: |
+        Unusually for this API, this endpoint **works unauthenticated** — signed only,
+        with no `device_id`.
+      security: []
+      parameters:
+        - { name: latitude, in: query, required: true, schema: { type: string } }
+        - { name: longitude, in: query, required: true, schema: { type: string } }
+        - { name: locale, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Stacks
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/discover/more:
+    get:
+      tags: [discovery]
+      summary: Expand one discover stack
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: stack_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/Profile' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/recommendations:
+    get:
+      tags: [discovery]
+      summary: Recommended profile stacks
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: flavor, in: query, schema: { type: string } }
+        - { name: latitude, in: query, schema: { type: string } }
+        - { name: longitude, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Stacks
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/alerts:
+    get:
+      tags: [discovery]
+      summary: Notifications
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+      responses:
+        '200':
+          description: Alerts
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/moments:
+    get:
+      tags: [moments]
+      summary: The moments feed
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+      responses:
+        '200':
+          description: Feed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exclusions_count: { type: integer }
+                  my_moments: { type: array, items: { $ref: '#/components/schemas/Moment' } }
+                  moments: { type: array, items: { $ref: '#/components/schemas/Moment' } }
+                  nearby_moments: { type: array, items: { $ref: '#/components/schemas/Moment' } }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/moments/show:
+    get:
+      tags: [moments]
+      summary: Fetch one moment
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: moment_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Moment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  moment: { $ref: '#/components/schemas/Moment' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/moments/nearby:
+    get:
+      tags: [moments]
+      summary: Moments near a position
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: latitude, in: query, required: true, schema: { type: string } }
+        - { name: longitude, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Moments
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/moments/trending:
+    get:
+      tags: [moments]
+      summary: Trending moments
+      description: |
+        Returned **400 in all four observations**, consistent with the
+        `latitude=0.0&longitude=0.0` those captures were taken under. Send a real
+        position.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: latitude, in: query, required: true, schema: { type: string } }
+        - { name: longitude, in: query, required: true, schema: { type: string } }
+        - { name: locale, in: query, schema: { type: string } }
+        - { name: cache_id, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Moments
+          content:
+            application/json:
+              schema: { type: object }
+        '400':
+          description: Observed whenever the position was unknown.
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/moments/targets:
+    get:
+      tags: [moments]
+      summary: Profiles a moment can be targeted at
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+      responses:
+        '200':
+          description: Profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Profile' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/moments/mutes:
+    post:
+      tags: [moments]
+      summary: Mute a profile's moments
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [target_profile_id]
+                  properties:
+                    target_profile_id: { type: string }
+      responses:
+        '200': { description: Muted }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [moments]
+      summary: Unmute a profile's moments
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: target_profile_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Unmuted }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/moment:
+    post:
+      tags: [moments]
+      summary: Post a moment
+      description: |
+        Expiry is set here via `duration_in_hours`; there is no explicit expiry field on
+        read. Audience targeting uses MomentTargetGroup ids — see
+        [scruff-enums.md](../api/scruff-enums.md).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [request_guid, guid]
+              properties:
+                request_guid: { type: string }
+                guid: { type: string }
+                target_profile_ids: { type: string }
+                favorite_folder_ids: { type: string }
+                target_types: { type: string }
+                image: { type: string, format: binary }
+                video: { type: string, format: binary }
+                crop_top: { type: number }
+                crop_left: { type: number }
+                crop_bottom: { type: number }
+                crop_right: { type: number }
+                exclusion_list_additions: { type: string }
+                exclusion_list_subtractions: { type: string }
+                temporary_exclusions: { type: string }
+                mute: { type: boolean }
+                exif: { type: string }
+                duration_in_hours: { type: integer }
+                overlay_texts: { type: string }
+                tap_in_data: { type: string }
+      responses:
+        '200': { description: Posted }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [moments]
+      summary: Delete one of your moments
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: moment_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/moment/view:
+    post:
+      tags: [moments]
+      summary: Record that you watched a moment
+      description: Visible to the moment's poster.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [moment_id]
+                  properties:
+                    moment_id: { type: string }
+      responses:
+        '200': { description: Recorded }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/events:
+    get:
+      tags: [venture]
+      summary: Events near a position
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: latitude, in: query, required: true, schema: { type: string } }
+        - { name: longitude, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Events
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/events/details:
+    get:
+      tags: [venture]
+      summary: Fetch one event
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: event_id, in: query, required: true, schema: { type: string } }
+        - { name: latitude, in: query, schema: { type: string } }
+        - { name: longitude, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Event
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/events/rsvps:
+    get:
+      tags: [venture]
+      summary: Events you have RSVPed to
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    post:
+      tags: [venture]
+      summary: RSVP to an event
+      description: May be visible to other attendees. Socket class 901.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [event_id]
+                  properties:
+                    event_id: { type: string }
+      responses:
+        '200': { description: RSVPed }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [venture]
+      summary: Withdraw an RSVP
+      description: Socket class 902.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: event_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Withdrawn }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/explorer/cities:
+    get:
+      tags: [venture]
+      summary: Explorer cities near a position
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: latitude, in: query, required: true, schema: { type: string } }
+        - { name: longitude, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Cities
+          content:
+            application/json:
+              schema: { type: array, items: { type: object } }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/explorer/details:
+    get:
+      tags: [venture]
+      summary: One city's here-now, here-soon, ambassadors and events
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: location_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: City detail
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/explorer/geocode:
+    get:
+      tags: [venture]
+      summary: Resolve a place query to locations
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: query, in: query, required: true, schema: { type: string } }
+        - { name: language_code, in: query, schema: { type: string } }
+        - { name: country_code, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Locations
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/explorer/trips:
+    get:
+      tags: [venture]
+      summary: A profile's travel plans
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: profile_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Trips
+          content:
+            application/json:
+              schema: { type: object }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    post:
+      tags: [venture]
+      summary: Create a trip
+      description: |
+        Trips appear on your profile to anyone who can see it. Socket class 800.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - $ref: '#/components/schemas/TripParams'
+      responses:
+        '200': { description: Created }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    put:
+      tags: [venture]
+      summary: Update a trip
+      description: Socket class 802. Same body as create, plus `id`.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - $ref: '#/components/schemas/TripParams'
+                - type: object
+                  required: [id]
+                  properties:
+                    id: { type: string }
+      responses:
+        '200': { description: Updated }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+    delete:
+      tags: [venture]
+      summary: Delete a trip
+      description: Socket class 801.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deleted }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/grid/matches_mutual:
+    get:
+      tags: [grid]
+      summary: Mutual matches
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/inbox/unread:
+    get:
+      tags: [grid]
+      summary: Unread conversations, as a profile grid
+      description: |
+        A grid, not an inbox page — it returns the standard grid envelope rather than
+        `InboxPage`. Use `GET /app/inbox/stream` for actual conversation data.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/inbox/recent:
+    get:
+      tags: [grid]
+      summary: Recent conversations, as a profile grid
+      description: See `GET /app/inbox/unread` — the same grid-shaped view.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - $ref: '#/components/parameters/gridOffset'
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
 components:
   securitySchemes:
     deviceId:
@@ -674,6 +1724,26 @@ components:
       style: form
       explode: true
 
+    gridOffset:
+      name: gridParams
+      in: query
+      description: |
+        The shared grid paging parameters: `query_sort_type`, `offset`, `latitude`,
+        `longitude`, `location_provider`, and optionally `limit` and `cache_id`.
+        Advance by the response's `block_size`, not by the `limit` you asked for.
+      schema:
+        type: object
+        properties:
+          query_sort_type: { type: integer, enum: [0, 1, 2, 3] }
+          offset: { type: integer }
+          latitude: { type: string }
+          longitude: { type: string }
+          location_provider: { type: string }
+          limit: { type: integer }
+          cache_id: { type: string }
+      style: form
+      explode: true
+
   responses:
     StatusOnlyError:
       description: |
@@ -708,7 +1778,7 @@ components:
           const: '8.1600'
           description: The packed form of the semver, `sprintf("%d.%02d%02d")`.
         client_semver: { type: string, const: '8.16.0' }
-        flavor: { type: string, enum: ['1', '2', '3'], description: 1 SCRUFF, 2 Jack'd, 3 GROWLr. }
+        flavor: { type: string, enum: ['1', '2', '3'], description: '1 SCRUFF, 2 Jack''d, 3 GROWLr.' }
         device_type: { type: string, enum: ['0', '1', '2', '3', '4'], description: 2 is Android. }
 
     SignatureParams:
@@ -739,7 +1809,7 @@ components:
         system_version: { type: string }
         locale: { type: string, default: en-US }
         build: { type: string, const: '169074' }
-        user_agent: { type: string, description: A device string sent as a FIELD, not the HTTP header. }
+        user_agent: { type: string, description: 'A device string sent as a FIELD, not the HTTP header.' }
         register_count: { type: integer }
         register_count_for_version: { type: integer }
         latitude: { type: string }
@@ -754,7 +1824,7 @@ components:
       properties:
         socket: { $ref: '#/components/schemas/SocketInfo' }
         profile: { $ref: '#/components/schemas/Profile' }
-        now: { type: string, description: An RFC 1123 HTTP date, not a unix integer. }
+        now: { type: string, description: 'An RFC 1123 HTTP date, not a unix integer.' }
         cdn: { type: string, format: uri }
         profile_cdn: { type: string, format: uri }
         app_cdn: { type: string, format: uri }
@@ -918,7 +1988,7 @@ components:
         recent: { type: boolean }
         last_login: { type: string }
         dst: { type: number, description: Distance in metres. }
-        has_image: { type: integer, description: A photo VERSION, not a boolean. }
+        has_image: { type: integer, description: 'A photo VERSION, not a boolean.' }
         album_images: { type: integer }
         flavors: { type: array, items: { type: integer } }
         face_pic: { type: boolean }
@@ -1056,3 +2126,68 @@ components:
         timestamp: { type: integer }
         backlog: { type: integer, description: 0 means live. }
         results: { type: [object, 'null'] }
+
+    FavoriteFolder:
+      type: object
+      description: A user-defined grouping of favorites.
+      properties:
+        id: { type: [string, integer] }
+        creator_id: { type: [string, integer] }
+        folder_type: { type: [integer, 'null'] }
+        name: { type: string }
+
+    NamedOption:
+      type: object
+      description: An `{id, name}` lookup entry, used by genders and pronouns.
+      properties:
+        id: { type: [string, integer] }
+        name: { type: string }
+
+    TripParams:
+      type: object
+      description: The editable fields of a travel plan.
+      properties:
+        location: { type: string }
+        location_id: { type: string }
+        starts_at: { type: string }
+        ends_at: { type: string }
+        notes: { type: string }
+        category: { type: integer }
+        ongoing: { type: boolean }
+        server_created: { type: boolean }
+
+    Moment:
+      type: object
+      description: |
+        An ephemeral story. Expiry is set at post time via `duration_in_hours`; there is
+        no expiry field on read.
+      properties:
+        id: { type: [string, integer] }
+        guid: { type: string, description: 32 hex characters. }
+        created_at: { type: string }
+        image_url: { type: string, format: uri }
+        media_type: { type: integer, description: '0 image, 1 HLS video.' }
+        manifest_url: { type: string, format: uri }
+        manifest_cookies:
+          type: object
+          description: CloudFront signing cookies for the HLS manifest.
+        viewed: { type: boolean }
+        muted: { type: boolean }
+        classification_status: { type: integer }
+        classification_outcome: { type: integer }
+        tap_in:
+          type: object
+          properties:
+            id: { type: [string, integer] }
+            title: { type: string }
+            placement:
+              type: object
+              properties:
+                scale: { type: number }
+                rotation: { type: number }
+                x_offset_pct: { type: number }
+                y_offset_pct: { type: number }
+            additional_user_count: { type: integer }
+            profiles:
+              type: array
+              items: { $ref: '#/components/schemas/Profile' }

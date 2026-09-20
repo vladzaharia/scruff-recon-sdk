@@ -11,8 +11,23 @@ API was probed beyond what those clients do during ordinary use.
 | **Recon** | [`recon.md`](./recon.md) | [`recon-realtime.md`](./recon-realtime.md) — SignalR | [`recon-enums.md`](./recon-enums.md) |
 | **SCRUFF** | [`scruff.md`](./scruff.md) | [`scruff-realtime.md`](./scruff-realtime.md) — encrypted WebSocket | [`scruff-enums.md`](./scruff-enums.md) |
 
-Machine-readable REST specs live in [`../openapi/`](../openapi/). The raw
+Machine-readable REST specs live in [`../openapi/`](../openapi/) — OpenAPI 3.1,
+`redocly lint`-clean, covering 71 Recon paths and 55 SCRUFF paths. The raw
 reverse-engineering notes are in [`../research/`](../research/).
+
+## What is covered
+
+Both references, and the Go clients beside them, cover **everything a member can do**.
+The line is drawn at **member, not moderator**: administrator and anti-fraud surface is
+documented in prose but deliberately left unimplemented and unmodelled — Recon's
+`payment` and `verification` services and its `dvrt` admin paths, SCRUFF's
+`trials/admin_*`, `boost/grant`, `face_liveness`, `sms/send` and `captcha`.
+
+⚠️ **Read paths are largely `[observed]`; most write paths are `[client]` and have never
+been sent to the live API by this project.** Their request shapes come from the vendors'
+own clients and are authoritative, but the responses are unconfirmed. If you exercise one
+and the server disagrees with what is written here, that is new information — please
+report it rather than assuming the document is merely sloppy.
 
 ## Provenance
 

@@ -30,6 +30,27 @@ did on its own during ordinary use.
 
 ---
 
+## Client coverage
+
+A Go client implementing this reference lives in [`../../recon/`](../../recon/).
+
+It covers **everything a member can do**: authentication, messaging and media, profiles
+and profile editing, the discovery grid and saved filters, the full social graph (blocks,
+cruises, visits, friend requests, follows), galleries and photo upload, the feed,
+sponsored content, location, membership, events, and reporting.
+
+Two areas here are documented but **deliberately not implemented**, because they are
+account administration rather than member actions:
+
+- [`payment`](#15-payment-client) — products, orders, recurring billing.
+- [`verification`](#16-verification-client) — age and identity checks.
+- The `dvrt` admin paths in [§11.4](#114-adverts-news-preferences-client).
+
+⚠️ Most **write** paths in this document are `[client]`, and the client has not sent them
+to the live API. The request shapes are authoritative; the responses are not confirmed.
+
+---
+
 ## 1. Transport and conventions
 
 ### 1.1 Hosts
@@ -1639,6 +1660,7 @@ is either observed on the wire or read out of the client's own implementation.
 | **Non-empty `attachments[]`** | Every observed message had an empty array, so the element shape is client-derived. |
 | **Group conversations** | No `isGroup: true` record exists in the capture. `name` and `participantCount > 2` behaviour is untested. |
 | **`membershipLevelId` beyond 0/1** | Only `> 0` and `== 1` are ever compared. ⚠️ Note this implies a real UI inconsistency: a tier ≥ 2 would be treated as premium (`> 0`) but get no badge (`== 1` false), suggesting such tiers are unused or unhandled. |
+| **Unexercised write surfaces** | No live traffic for profile editing, saved filters, relation writes (block/cruise/visit/friend/follow), preference updates, photo upload or reordering, event RSVP, location publishing, or reporting. All `[client]`-derived — reliable for request shape, unconfirmed for response detail. |
 | **`discovery` service** | Registered in the base-URL table with **zero call sites** in the production build. The URL interceptor can rewrite hosts from a `discoBaseUrls` table in `localStorage`, but nothing in this bundle populates it — presumably seeded by the legacy v2 site. |
 
 ### Recently closed

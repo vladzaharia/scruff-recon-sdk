@@ -1,0 +1,38 @@
+# Lint configuration for the two reverse-engineered specifications.
+#
+# These describe APIs as they actually are, not as they should have been
+# designed, so a few style rules are turned off where following them would make
+# the specification wrong. Each one says why.
+
+extends:
+  - recommended
+
+rules:
+  # Recon's report-category endpoint genuinely requires a trailing slash:
+  # /api/contentReview/reportCategories/ 404s without it. Normalising the path
+  # to satisfy the linter would document an endpoint that does not exist.
+  no-path-trailing-slash: off
+
+  # Recon really does serve /profileSearch/profiles/name/{profileName} beside
+  # /profileSearch/profiles/{profileId}/defaultFilters. Those templates are
+  # ambiguous by OpenAPI's rules, but the server resolves them by the literal
+  # "name" segment. The ambiguity is the API's, and hiding it would be a lie.
+  no-ambiguous-paths: off
+
+  # Neither API has operation ids; these are reverse-engineered specifications,
+  # not contracts a server was generated from. Inventing ids would imply an
+  # upstream naming that does not exist.
+  operation-operationId: off
+  operation-operationId-unique: off
+  operation-summary: warn
+
+  # Error responses are modelled with a single `default` rather than enumerated
+  # per status code. Recon returns RFC 7807 ProblemDetails uniformly; SCRUFF has
+  # no error body at all and instead uses a custom 420-452 status vocabulary
+  # whose meaning is per-endpoint, so enumerating 4xx per operation would be
+  # both enormous and misleading. See docs/api/scruff.md section 1.5.
+  operation-4xx-response: off
+
+  # Security is declared globally and disabled per-operation on the handful of
+  # unauthenticated endpoints.
+  security-defined: error

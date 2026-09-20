@@ -11,13 +11,27 @@ info:
 
     ## Scope
 
-    This document covers the **authentication, messaging, profile, media, and read-only
-    discovery** surface — the endpoints a client actually needs, and the ones with
-    verified schemas. The full API is considerably larger (18 services, ~179 call sites,
-    including payments, events, verification and moderation); those are documented in
-    prose in [`../api/recon.md`](../api/recon.md) but are deliberately not modelled here,
-    because specifying request bodies that have never been exercised would imply more
-    confidence than is warranted.
+    This document covers **everything a member can do**: authentication, messaging,
+    profiles and profile editing, the discovery grid and saved filters, the full social
+    graph (blocks, cruises, visits, friend requests, follows), media galleries and
+    uploads, the feed, sponsored content, location, membership, events, and reporting.
+
+    Two areas are deliberately **not** modelled, and are described in prose in
+    [`../api/recon.md`](../api/recon.md) instead:
+
+    - **Payment and verification.** Account administration rather than member actions.
+    - **`dvrt` admin paths.** Advertiser-side, not reachable by a normal account.
+
+    ## Confidence
+
+    Provenance is per-endpoint in the prose reference. In this document the split is:
+
+    - The **read** surface is largely `[observed]` — seen on the wire.
+    - Most **write** paths are `[client]`: read from Recon's own Angular bundle, which
+      makes the paths, parameters and body shapes authoritative, but they have **not
+      been exercised against the live API** by this project. Treat a surprising response
+      as new information about the API rather than as a defect in this document, and
+      please report it.
 
     ## Traps this specification cannot express
 
@@ -63,7 +77,21 @@ tags:
   - name: feed
     description: Notifications.
   - name: media
-    description: Galleries.
+    description: Galleries and profile photos.
+  - name: dvrt
+    description: |
+      Sponsored content and broadcast messages. ("dvrt"/"dvrtsr" = advert/advertiser.)
+      Drives the official threads that appear in the inbox.
+  - name: location
+    description: Location lookup, distance, and position publishing.
+  - name: membership
+    description: Subscription status.
+  - name: contentReview
+    description: Reporting profiles and message content.
+  - name: antiAbuse
+    description: Display-name screening.
+  - name: event
+    description: Events and RSVPs.
 
 paths:
   /account/appInstallations:
@@ -677,7 +705,13 @@ paths:
         - name: relation
           in: path
           required: true
-          schema: { type: string, enum: [cruisedByProfiles, visitorProfiles] }
+          schema:
+            type: string
+            enum: [cruisedByProfiles, visitorProfiles, followers, following]
+          description: |
+            Note `following` is **singular** here, against the plural `followings` used
+            for the list on `profileSearch`. `cruisedByProfiles` and `visitorProfiles`
+            return RelationCounts; `followers` and `following` return `{count}`.
         - $ref: '#/components/parameters/culture'
       responses:
         '200':
@@ -741,6 +775,1127 @@ paths:
                   totalRecords: { type: integer }
         default: { $ref: '#/components/responses/Error' }
 
+  /account/accounts/{accountId}/preferences:
+    parameters:
+      - $ref: '#/components/parameters/accountId'
+      - $ref: '#/components/parameters/culture'
+    get:
+      tags: [account]
+      summary: Read account display preferences
+      description: |
+        The two metric flags are independent: an account can show imperial distance and
+        metric height at once, which is the default in several locales.
+      responses:
+        '200':
+          description: Preferences
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountPreferences' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [account]
+      summary: Replace account display preferences
+      description: A full replace, not a merge. Read first, modify, send the whole object.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountPreferences' }
+      responses:
+        '200': { description: Updated }
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/preferences:
+    parameters:
+      - $ref: '#/components/parameters/profileId'
+      - $ref: '#/components/parameters/culture'
+    get:
+      tags: [messaging]
+      summary: Read message notification preferences
+      responses:
+        '200':
+          description: Preferences
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessagingPreferences' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [messaging]
+      summary: Replace message notification preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessagingPreferences' }
+      responses:
+        '200': { description: Updated }
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/contacts:
+    get:
+      tags: [messaging]
+      summary: List messaging contacts
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Contacts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RelationEntry' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/conversations/{conversationId}/attachments/{attachmentId}:
+    delete:
+      tags: [messaging]
+      summary: Delete an attachment from a conversation
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/conversationId'
+        - name: attachmentId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '204': { description: Deleted }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profile/profiles/{profileId}:
+    parameters:
+      - $ref: '#/components/parameters/profileId'
+      - $ref: '#/components/parameters/culture'
+    put:
+      tags: [profile]
+      summary: Replace a profile
+      description: |
+        A full replace: every field you do not populate is sent as its zero value. Prefer
+        PATCH for ordinary edits.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Profile' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [profile]
+      summary: Patch a profile (RFC 6902 JSON Patch)
+      description: |
+        The official client only ever sends `replace`, and **always includes
+        `/rowVersion`** for optimistic concurrency. Omitting it is how concurrent edits
+        silently clobber one another: `rowVersion` reads as `null` on a fetched profile
+        but is required here.
+
+        Observed patch sets: bio (`/shortText`, `/longText`), rename (`/name`), details
+        (`/dateOfBirth`, `/positionId`, `/ethnicityId`, `/heightCm`, `/bodyTypeId`,
+        `/bodyHairId`, `/roleId`), interests (`/interests`), visibility (`/isPublic`).
+        `/safeSexId` is readable but appears in no patch set.
+      requestBody:
+        required: true
+        content:
+          application/json-patch+json:
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/PatchOp' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '409':
+          description: rowVersion did not match; re-read and retry
+        default: { $ref: '#/components/responses/Error' }
+
+  /profile/profiles/{profileId}/detail/{version}:
+    get:
+      tags: [profile]
+      summary: Fetch a profile's long bio
+      description: |
+        Split out from the profile document so it can be cached and invalidated
+        independently by version. `Profile.longText` is always null; this is where the
+        bio actually lives. The official client caches it for 15 minutes.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - name: version
+          in: path
+          required: true
+          schema: { type: integer }
+          description: The profile's version number, from `Profile.version`.
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Bio
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfileDetail' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profile/officialProfiles/{profileId}:
+    get:
+      tags: [profile]
+      summary: Fetch a system or blog persona
+      description: |
+        Official profiles differ from member profiles in ways that break naive handling:
+        `membershipLevelId` and `age` are 0, `detailUrl` is null, and `lastUpdatedDate`
+        is the zero time.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profile/validHeightsCm:
+    get:
+      tags: [profile]
+      summary: Valid height values
+      description: |
+        The one lookup endpoint whose `data` is a **bare integer array** rather than
+        `{id, name}` objects.
+      parameters:
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Heights in centimetres
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { type: integer }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileSearch/profiles/name/{profileName}:
+    get:
+      tags: [profileSearch]
+      summary: Resolve a display name to a profile id
+      parameters:
+        - name: profileName
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Profile id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileSearch/profiles/{profileId}/{socialRelation}:
+    get:
+      tags: [profileSearch]
+      summary: List friends, followers or followings
+      description: |
+        Entries are split by whether the relationship is reciprocated.
+
+        Note the naming asymmetry in this API: the **lists** (`friends`, `followers`,
+        `followings` — plural) live here on `profileSearch`, while the **counts**
+        (`followers/count`, `following/count` — singular "following") live on
+        `profileRelations`.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - name: socialRelation
+          in: path
+          required: true
+          schema: { type: string, enum: [friends, followers, followings] }
+        - name: myProfileId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: noCache
+          in: query
+          schema: { type: boolean }
+          description: Sent when reading your own lists, which you may have just changed.
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Social list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/SocialList' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileSearch/profiles/{profileId}/friends/count:
+    get:
+      tags: [profileSearch]
+      summary: Count friends, split by mutuality
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - name: myProfileId
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Counts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SocialCounts' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/blocks/{targetProfileId}:
+    parameters:
+      - $ref: '#/components/parameters/profileId'
+      - $ref: '#/components/parameters/targetProfileId'
+      - $ref: '#/components/parameters/culture'
+    put:
+      tags: [profileRelations]
+      summary: Block a profile
+      description: Capped by `appSettings.limits.blocks` (50 on the observed account).
+      responses:
+        '200': { description: Blocked }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [profileRelations]
+      summary: Unblock a profile
+      responses:
+        '204': { description: Unblocked }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/cruisedProfiles/{targetProfileId}:
+    parameters:
+      - $ref: '#/components/parameters/profileId'
+      - $ref: '#/components/parameters/targetProfileId'
+      - $ref: '#/components/parameters/culture'
+    put:
+      tags: [profileRelations]
+      summary: Cruise a profile
+      description: |
+        A cruise is Recon's like. It is **visible to the recipient and notifies them**.
+
+        Re-cruising the same profile is throttled by
+        `appSettings.limits.cruiseMinUpdatePeriodDays` (7). The rejection is a normal
+        error whose `title` contains a `{cruiseMinUpdatePeriod}` token — treat it as
+        "too soon" rather than as a transport failure, and do not retry it.
+
+        The request body is a literal `null`, not an empty object.
+      responses:
+        '200': { description: Cruised }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [profileRelations]
+      summary: Withdraw a cruise
+      responses:
+        '204': { description: Withdrawn }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/visitedProfiles/{targetProfileId}:
+    put:
+      tags: [profileRelations]
+      summary: Record a profile visit
+      description: |
+        Recording a visit is what puts you in the target's visitors list. Simply
+        **fetching** a profile does not do this; the visit is a separate, explicit act.
+
+        Suppressed server-side when your own `showVisits` preference is false, which is
+        what stealth mode means.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/targetProfileId'
+        - name: source
+          in: query
+          schema: { type: integer }
+          description: '`2` when arriving from the v2 site.'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200': { description: Recorded }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/logCruisedByViewed:
+    post:
+      tags: [profileRelations]
+      summary: Mark the cruised-by list seen
+      description: |
+        Send the `mostRecentDate` from the list response rather than the current time:
+        that is what the official client does, and it avoids marking entries seen that
+        arrived between the read and this call.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ViewedDate' }
+      responses:
+        '200': { description: Watermark moved }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/logVisitorsViewed:
+    post:
+      tags: [profileRelations]
+      summary: Mark the visitors list seen
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ViewedDate' }
+      responses:
+        '200': { description: Watermark moved }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/listViewStats:
+    get:
+      tags: [profileRelations]
+      summary: Last-viewed watermarks for the cruise and visitor lists
+      description: |
+        Compare each list entry's `date` against the matching watermark; newer, or a null
+        watermark, means unseen. Notifications are **not** covered here — they use
+        `feed/.../logNotificationsViewed`.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Watermarks
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListViewStats' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/friendRequests:
+    get:
+      tags: [profileRelations]
+      summary: List pending friend requests
+      description: |
+        Returns requests in both directions. Compare `requestingProfileId` against your
+        own id to tell incoming from outgoing.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Requests
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/FriendRequest' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/friendRequests/{targetProfileId}:
+    parameters:
+      - $ref: '#/components/parameters/profileId'
+      - $ref: '#/components/parameters/targetProfileId'
+      - $ref: '#/components/parameters/culture'
+    put:
+      tags: [profileRelations]
+      summary: Send a friend request
+      description: |
+        Notifies the target. Capped by `appSettings.limits.friends` (500).
+
+        Error `103000002` means **you** are at your limit; `103000009` means **they**
+        are at theirs. The second is not something the user can act on, so surface it
+        differently.
+      responses:
+        '200': { description: Requested }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [profileRelations]
+      summary: Withdraw a friend request
+      responses:
+        '204': { description: Withdrawn }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/friendRequestResponse/{targetProfileId}/{decision}:
+    post:
+      tags: [profileRelations]
+      summary: Accept or reject a friend request
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/targetProfileId'
+        - name: decision
+          in: path
+          required: true
+          schema: { type: string, enum: [accept, reject] }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200': { description: Answered }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/friends/{targetProfileId}:
+    delete:
+      tags: [profileRelations]
+      summary: End a friendship
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/targetProfileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '204': { description: Removed }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/followers/{targetProfileId}:
+    parameters:
+      - $ref: '#/components/parameters/profileId'
+      - $ref: '#/components/parameters/targetProfileId'
+      - $ref: '#/components/parameters/culture'
+    put:
+      tags: [profileRelations]
+      summary: Follow a profile
+      description: One-way and needs no approval, unlike friending. Capped by `limits.following` (500).
+      responses:
+        '200': { description: Followed }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [profileRelations]
+      summary: Unfollow, or remove a follower
+      description: |
+        This endpoint serves **both** purposes in the official client: it unfollows
+        someone you follow and removes a follower of yours. Which it does depends on the
+        existing relationship, not on the request.
+      responses:
+        '204': { description: Removed }
+        default: { $ref: '#/components/responses/Error' }
+
+
+  /profileRelations/profiles/{profileId}/preferences:
+    parameters:
+      - $ref: '#/components/parameters/profileId'
+      - $ref: '#/components/parameters/culture'
+    get:
+      tags: [profileRelations]
+      summary: Read social notification preferences
+      responses:
+        '200':
+          description: Preferences
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RelationPreferences' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [profileRelations]
+      summary: Replace social notification preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RelationPreferences' }
+      responses:
+        '200': { description: Updated }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [profileRelations]
+      summary: Patch social notification preferences
+      description: |
+        `showVisits: false` **is** stealth mode — note the inversion when exposing it as
+        a "stealth" toggle.
+      requestBody:
+        required: true
+        content:
+          application/json-patch+json:
+            schema:
+              type: array
+              items: { $ref: '#/components/schemas/PatchOp' }
+      responses:
+        '200': { description: Updated }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/v2Favourites/{profileId}/canImport:
+    get:
+      tags: [profileRelations]
+      summary: Can legacy favourites be imported
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Availability
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value: { type: boolean }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/v2Favourites/{profileId}/import:
+    post:
+      tags: [profileRelations]
+      summary: Import legacy favourites as cruises
+      description: Not reversible in bulk. Check `canImport` first.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200': { description: Imported }
+        default: { $ref: '#/components/responses/Error' }
+
+  /feed/profiles/{profileId}/feeds/{feedName}:
+    get:
+      tags: [feed]
+      summary: Read a feed
+      description: |
+        The feed name is a path segment, so feeds beyond `notifications` and `home` may
+        exist. The dereferenced feed item (see `/feed/feedItems/{feedItemId}`) carries
+        the display strings the stub omits.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - name: feedName
+          in: path
+          required: true
+          schema: { type: string, examples: [notifications, home] }
+        - name: noCache
+          in: query
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Feed items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/FeedItem' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /feed/feedItems/{feedItemId}:
+    get:
+      tags: [feed]
+      summary: Dereference one feed item
+      parameters:
+        - name: feedItemId
+          in: path
+          required: true
+          schema: { type: string }
+          description: Numeric, but carried as a **string**.
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Feed item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FeedItem' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /feed/profiles/{profileId}/logNotificationsViewed:
+    post:
+      tags: [feed]
+      summary: Mark notifications seen
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ViewedDate' }
+      responses:
+        '200': { description: Watermark moved }
+        default: { $ref: '#/components/responses/Error' }
+
+  /dvrt/profiles/{profileId}/bulkMessages:
+    get:
+      tags: [dvrt]
+      summary: List broadcast and sponsored messages
+      description: |
+        These drive the "official" threads that appear in the inbox alongside real
+        conversations, and they come from a different service than `messaging`.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/deviceTypeId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/BulkMessage' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /dvrt/profiles/{profileId}/bulkMessages/{bulkMessageId}/read:
+    post:
+      tags: [dvrt]
+      summary: Mark a broadcast message read
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/bulkMessageId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Marked read }
+        default: { $ref: '#/components/responses/Error' }
+
+  /dvrt/profiles/{profileId}/bulkMessages/{bulkMessageId}/delete:
+    delete:
+      tags: [dvrt]
+      summary: Delete a broadcast message
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/bulkMessageId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '204': { description: Deleted }
+        default: { $ref: '#/components/responses/Error' }
+
+  /dvrt/dvrtsrs/{dvrtsrId}:
+    get:
+      tags: [dvrt]
+      summary: Fetch an advertiser
+      description: |
+        Resolve `BulkMessage.senderUrl` here **only when `isOfficial` is false**. When it
+        is true the same field points at `/profile/officialProfiles/{id}` instead — it is
+        a discriminated pointer, not a stable service.
+      parameters:
+        - name: dvrtsrId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Advertiser
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Advertiser' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /location/locations/{locationId}:
+    get:
+      tags: [location]
+      summary: Resolve a location id to display names
+      description: |
+        `ttlMinutes` is the server telling you how long to cache the result. When a
+        profile carries no `locationUrl` the official client shows nothing rather than
+        falling back to anything.
+      parameters:
+        - name: locationId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Location
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Location' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /location/granularLocations/{lowerLocationId}/distances/{higherLocationId}:
+    get:
+      tags: [location]
+      summary: Distance between two locations
+      description: |
+        The two ids must be sorted **lower first**, numerically. The endpoint is not
+        symmetric in its path, so `900/distances/100` is not the same request as
+        `100/distances/900`. Sorting lexically is wrong: `"1000" < "900"` as strings.
+      parameters:
+        - name: lowerLocationId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: higherLocationId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Distance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  distanceMetres: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /location/profiles/{profileId}/geolocation:
+    put:
+      tags: [location]
+      summary: Publish your position
+      description: |
+        Cadence expected by the server, from `appSettings.geolocation`: no more often
+        than every 2 minutes, at least every 15 minutes, and on movement over 99 m.
+
+        `accuracyMetres` is device-sourced — omit it rather than inventing a value.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GeoLocation' }
+      responses:
+        '200': { description: Recorded }
+        default: { $ref: '#/components/responses/Error' }
+
+  /membership/profiles/{profileId}/membershipStatus:
+    get:
+      tags: [membership]
+      summary: Subscription status
+      description: |
+        `membershipLevelId` is 0 for free and official profiles and >= 1 for premium. The
+        official client only ever tests `> 0`, so higher tiers may exist without distinct
+        behaviour; test for premium rather than comparing to a specific tier.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Membership
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MembershipStatus' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /contentReview/reportCategories/:
+    get:
+      tags: [contentReview]
+      summary: List report categories
+      description: |
+        Note the **required trailing slash**; without it the endpoint 404s.
+
+        Only id 13 ("Other") is hardcoded in the official client. Fetch the rest rather
+        than assuming the numbering is stable.
+      parameters:
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Categories
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ReportCategory' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /contentReview/profiles/{profileId}/report:
+    post:
+      tags: [contentReview]
+      summary: Report a profile
+      description: |
+        Affects another person's account and is not reversible from the client. Send it
+        in response to a deliberate human decision, never automatically.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Report' }
+      responses:
+        '200': { description: Reported }
+        default: { $ref: '#/components/responses/Error' }
+
+  /antiAbuse/profileNameChecks:
+    post:
+      tags: [antiAbuse]
+      summary: Check a candidate display name
+      description: |
+        **Unauthenticated**, so it is usable before login. The client-side rule is
+        `^[a-zA-Z0-9]{4,20}$`; this endpoint is the server's stricter view.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profileName]
+              properties:
+                profileName: { type: string }
+                profileId:
+                  type: [string, 'null']
+                  format: uuid
+      responses:
+        '200':
+          description: Verdict
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NameCheck' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /media/profiles/{profileId}/galleries/{galleryId}:
+    get:
+      tags: [media]
+      summary: Fetch one gallery
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/galleryId'
+        - $ref: '#/components/parameters/imageSizes'
+        - $ref: '#/components/parameters/deviceTypeId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Gallery
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Gallery' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /media/profiles/{profileId}/galleries/{galleryId}/fileProperties:
+    get:
+      tags: [media]
+      summary: List images in a gallery
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/galleryId'
+        - $ref: '#/components/parameters/imageSizes'
+        - $ref: '#/components/parameters/sortProperty'
+        - $ref: '#/components/parameters/deviceTypeId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Images
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaFilePropertiesList' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /media/profiles/{profileId}/fileProperties:
+    get:
+      tags: [media]
+      summary: List every image on a profile
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/imageSizes'
+        - $ref: '#/components/parameters/sortProperty'
+        - name: galleryTypeId
+          in: query
+          schema: { type: integer }
+        - $ref: '#/components/parameters/deviceTypeId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Images
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaFilePropertiesList' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /media/profiles/{profileId}/files:
+    post:
+      tags: [media]
+      summary: Upload a photo
+      description: |
+        Limits from `appSettings.limits`: `maxFileSizeBytes` 52428800 (50 MiB),
+        `maximumFilesPerProfile` 500, `maximumFilesInMainGallery` 5,
+        `maximumUploadsInBatch` 50, `minImageResolution` 400, extensions
+        `.bmp .gif .jpg .jpeg .png`. Read them from `appSettings` rather than hardcoding;
+        they differ from what is commonly assumed.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, galleryTypeId]
+              properties:
+                file: { type: string, format: binary }
+                galleryId: { type: string, format: uuid }
+                galleryTypeId: { type: integer }
+      responses:
+        '200':
+          description: Uploaded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaFileProperties' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /media/profiles/{profileId}/files/delete:
+    post:
+      tags: [media]
+      summary: Delete photos by id
+      description: A POST despite being a delete; the body is a bare array of ids.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { type: string, format: uuid }
+      responses:
+        '200': { description: Deleted }
+        default: { $ref: '#/components/responses/Error' }
+
+  /media/profiles/{profileId}/galleries/{galleryId}/files/{fileId}:
+    delete:
+      tags: [media]
+      summary: Remove an image from a gallery
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/galleryId'
+        - $ref: '#/components/parameters/fileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '204': { description: Removed }
+        default: { $ref: '#/components/responses/Error' }
+
+  /media/profiles/{profileId}/galleries/{galleryId}/files/{fileId}/position:
+    put:
+      tags: [media]
+      summary: Reorder an image within a gallery
+      description: |
+        Position 1 in the **primary** gallery is what "set as main photo" means; there is
+        no separate endpoint for it.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/galleryId'
+        - $ref: '#/components/parameters/fileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value: { type: integer }
+      responses:
+        '200': { description: Reordered }
+        default: { $ref: '#/components/responses/Error' }
+
+  /event/events:
+    get:
+      tags: [event]
+      summary: List events
+      description: |
+        `skip`/`take` are appended by the official client **only when `take` is
+        non-zero**; an unpaged request is a different request from `skip=0&take=0`. The
+        client pages these 24 at a time.
+      parameters:
+        - name: skip
+          in: query
+          schema: { type: integer }
+        - name: take
+          in: query
+          schema: { type: integer }
+        - name: isPast
+          in: query
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Event' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /event/events/{eventId}:
+    get:
+      tags: [event]
+      summary: Fetch one event
+      parameters:
+        - $ref: '#/components/parameters/eventId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Event' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /event/events/{eventId}/attendees/{profileId}:
+    parameters:
+      - $ref: '#/components/parameters/eventId'
+      - $ref: '#/components/parameters/profileId'
+      - $ref: '#/components/parameters/culture'
+    get:
+      tags: [event]
+      summary: Read your RSVP
+      responses:
+        '200':
+          description: RSVP status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  statusId: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [event]
+      summary: RSVP to an event
+      description: |
+        May be visible to other attendees depending on the event's `showAttendance`.
+
+        The accepted `statusId` values (going / interested / not going) are **not
+        resolvable** from the web bundle, so they are left as an opaque integer rather
+        than guessed at.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                statusId: { type: integer }
+      responses:
+        '200': { description: RSVPed }
+        default: { $ref: '#/components/responses/Error' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -795,6 +1950,40 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+
+    targetProfileId:
+      name: targetProfileId
+      in: path
+      required: true
+      description: The other member's profile id.
+      schema: { type: string, format: uuid }
+    galleryId:
+      name: galleryId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    fileId:
+      name: fileId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    eventId:
+      name: eventId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    bulkMessageId:
+      name: bulkMessageId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    sortProperty:
+      name: sortProperty
+      in: query
+      description: |
+        `2` on gallery lists, all-photos and gallery files; `3` on the main gallery. The
+        meaning of each is server-side and undetermined.
+      schema: { type: integer, enum: [2, 3] }
 
   responses:
     Error:
@@ -898,7 +2087,7 @@ components:
           type: array
           description: One account may own several; exactly one is active.
           items: { type: string, format: uuid }
-        membershipLevelId: { type: integer, description: "0 free, ≥1 premium." }
+        membershipLevelId: { type: integer, description: '0 free, ≥1 premium.' }
         signalRToken:
           type: string
           description: Returned but unused — realtime authenticates with the access token.
@@ -1029,8 +2218,8 @@ components:
       required: [text, files, attachments]
       properties:
         text: { type: string, maxLength: 1000 }
-        files: { type: array, items: { type: string }, description: Always present, usually empty. }
-        attachments: { type: array, items: { type: string }, description: Always present, usually empty. }
+        files: { type: array, items: { type: string }, description: 'Always present, usually empty.' }
+        attachments: { type: array, items: { type: string }, description: 'Always present, usually empty.' }
 
     SendByReferenceRequest:
       type: object
@@ -1152,7 +2341,7 @@ components:
     FeedItem:
       type: object
       properties:
-        feedItemId: { type: string, description: Numeric, but a string. }
+        feedItemId: { type: string, description: 'Numeric, but a string.' }
         feedItemUrl: { type: string }
         profileUrl: { type: string, description: May carry a stale version segment. }
         isSelfActor: { type: boolean }
@@ -1178,3 +2367,283 @@ components:
             id: { type: integer, minimum: 1, maximum: 11 }
             name: { type: string }
             isRestricted: { type: boolean }
+
+    ViewedDate:
+      type: object
+      description: |
+        A "seen" watermark. Send the `mostRecentDate` from the corresponding list
+        response rather than the current time, so entries that arrived between the read
+        and this call are not marked seen.
+      required: [viewedDate]
+      properties:
+        viewedDate: { type: string, format: date-time }
+
+    PatchOp:
+      type: object
+      description: |
+        One RFC 6902 JSON Patch operation. The official client only ever sends `replace`;
+        the server also accepts `add`, `copy`, `remove` and `test`.
+      required: [op, path]
+      properties:
+        op: { type: string, enum: [add, copy, remove, replace, test] }
+        path: { type: string, examples: ['/shortText'] }
+        value: {}
+        from: { type: string }
+
+    AccountPreferences:
+      type: object
+      description: |
+        The two metric flags are independent — an account can show imperial distance and
+        metric height at once.
+      properties:
+        culture: { type: string, examples: ['en-GB'] }
+        locale: { type: string, examples: ['en-GB'] }
+        showMetricDistance: { type: boolean }
+        showMetricHeight: { type: boolean }
+        gmtOffsetSeconds: { type: integer, examples: [-25200] }
+        countryCode2: { type: string, examples: ['us'] }
+
+    MessagingPreferences:
+      type: object
+      properties:
+        profileId: { type: string, format: uuid }
+        messageEmail: { type: boolean }
+        messagePushNotification: { type: boolean }
+
+    RelationPreferences:
+      type: object
+      description: '`showVisits: false` **is** stealth mode.'
+      properties:
+        profileId: { type: string, format: uuid }
+        showVisits: { type: boolean }
+        cruiseEmail: { type: boolean }
+        cruisePushNotification: { type: boolean }
+        friendRequestEmail: { type: boolean }
+        friendRequestPushNotification: { type: boolean }
+        followerPushNotification: { type: boolean }
+
+    ListViewStats:
+      type: object
+      description: |
+        Last-viewed watermarks. A null value means nothing has been viewed yet, so every
+        entry is unseen.
+      properties:
+        cruisedByLastViewedDate: { type: [string, 'null'], format: date-time }
+        visitorsLastViewedDate: { type: [string, 'null'], format: date-time }
+
+    FriendRequest:
+      type: object
+      description: |
+        Returned for both directions. Compare `requestingProfileId` against your own id
+        to tell incoming from outgoing.
+      properties:
+        requestingProfileId: { type: string, format: uuid }
+        targetProfileId: { type: string, format: uuid }
+        requestDate: { type: string, format: date-time }
+        requestingProfileUrl: { type: string, format: uri }
+        targetProfileUrl: { type: string, format: uri }
+
+    SocialList:
+      type: object
+      description: Friends, followers or followings, split by whether the relation is reciprocated.
+      properties:
+        mutual:
+          type: array
+          items: { $ref: '#/components/schemas/RelationEntry' }
+        nonMutual:
+          type: array
+          items: { $ref: '#/components/schemas/RelationEntry' }
+
+    SocialCounts:
+      type: object
+      properties:
+        mutualCount: { type: integer }
+        otherCount: { type: integer }
+
+    ProfileDetail:
+      type: object
+      description: |
+        The long bio, split out so it can be cached and invalidated independently by
+        version. `Profile.longText` is always null; this is where the text lives.
+      properties:
+        id: { type: string, format: uuid }
+        longText: { type: string }
+        version: { type: integer }
+
+    Location:
+      type: object
+      properties:
+        shortLocationName: { type: string }
+        longLocationName: { type: string }
+        ttlMinutes:
+          type: integer
+          description: How long the server wants this cached.
+          examples: [1440]
+
+    GeoLocation:
+      type: object
+      description: Position publish body.
+      required: [latitude, longitude]
+      properties:
+        appInstallationId: { type: string, format: uuid }
+        profileId: { type: string, format: uuid }
+        latitude: { type: number, format: double }
+        longitude: { type: number, format: double }
+        recordedDate: { type: string, format: date-time }
+        accuracyMetres:
+          type: [integer, 'null']
+          description: Device-sourced. Omit rather than inventing a value.
+        lookup:
+          type: object
+          properties:
+            longLocationName: { type: string }
+            shortLocationName: { type: string }
+
+    MembershipStatus:
+      type: object
+      properties:
+        membershipLevelId:
+          type: integer
+          description: '0 = free or official, >= 1 = premium. Test `> 0` rather than a specific tier.'
+        profileId: { type: string, format: uuid }
+        startDate: { type: string, format: date-time }
+        expiryDate: { type: string, format: date-time }
+        isRecurring: { type: boolean }
+        recurringBilling: { type: object }
+
+    BulkMessage:
+      type: object
+      description: |
+        A broadcast or sponsored message. These drive the "official" threads that appear
+        in the inbox alongside real conversations.
+      properties:
+        id: { type: string, format: uuid }
+        message:
+          type: string
+          description: 'Markdown-ish: carries `\n`, `**bold**` and `[link](url)`.'
+        mediaUrl:
+          type: string
+          format: uri
+          description: No file extension and no size parameter, unlike profile media.
+        deviceTypeId: { type: integer }
+        priority: { type: integer }
+        languageId: { type: integer }
+        isAdult: { type: boolean }
+        startDate: { type: string, format: date-time }
+        isRead: { type: boolean }
+        isOfficial: { type: boolean }
+        senderUrl:
+          type: string
+          format: uri
+          description: |
+            **Discriminated by `isOfficial`.** False points at `/dvrt/dvrtsrs/{id}`; true
+            points at `/profile/officialProfiles/{id}` — note also the inconsistent
+            `?culture=En` capitalisation on the official variant.
+        linkUrl: { type: string, format: uri }
+        subject: { type: string }
+
+    Advertiser:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        isOfficial: { type: boolean }
+        officialProfileUrl: { type: [string, 'null'], format: uri }
+        mediaFiles:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFile' }
+
+    ReportCategory:
+      type: object
+      properties:
+        id: { type: integer, examples: [13] }
+        name: { type: string, examples: ['Other'] }
+        priority: { type: integer }
+        order: { type: integer }
+        detail: { type: string }
+
+    Report:
+      type: object
+      required: [reportCategoryId]
+      properties:
+        conversationMessageIds:
+          type: array
+          items: { type: string, format: uuid }
+        isProfileContent: { type: boolean }
+        mediaMetaDataIds:
+          type: array
+          items: { type: string, format: uuid }
+          description: |
+            Capital **D**, inconsistently with `mediaMetadataId` elsewhere in this API.
+            That is the wire spelling.
+        reportCategoryId: { type: integer }
+        reportReason: { type: string }
+        reportedByAccountId: { type: string, format: uuid }
+
+    NameCheck:
+      type: object
+      properties:
+        isValid: { type: boolean }
+        errors:
+          type: array
+          items: { type: string }
+
+    MediaFileProperties:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        caption: { type: [string, 'null'] }
+        classificationId:
+          type: integer
+          description: '0 = moderation pending. Values >= 1 are not resolvable from the client.'
+        classificationDate: { type: string, format: date-time }
+        dimensions:
+          type: object
+          properties:
+            widthPixels: { type: integer }
+            heightPixels: { type: integer }
+        fileSizeInBytes: { type: integer }
+        fileType: { type: string }
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFile' }
+        galleryPositions:
+          type: array
+          items:
+            type: object
+            properties:
+              galleryId: { type: string, format: uuid }
+              galleryTypeId: { type: integer }
+              position: { type: integer }
+        isRestricted: { type: boolean }
+        uploadDate: { type: string, format: date-time }
+        rotationDegrees: { type: integer }
+
+    MediaFilePropertiesList:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFileProperties' }
+        totalRecords: { type: integer }
+
+    Event:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        location: { type: string }
+        startDate: { type: string, format: date-time }
+        endDate: { type: string, format: date-time }
+        showAttendance: { type: boolean }
+        thumbnailImageFiles:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFile' }
+        url: { type: string, format: uri }
+        isSponsored: { type: boolean }
+        sponsorName: { type: string }
+        country: { type: string }
+        photosBy: { type: string }
+        mediaCount: { type: integer }
+        content: { type: string }
+        slug: { type: string }

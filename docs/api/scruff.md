@@ -35,6 +35,26 @@ they differ in how the fact was established, not in how much you should trust it
 
 ---
 
+## Client coverage
+
+A Go client implementing this reference lives in [`../../scruff/`](../../scruff/).
+
+It covers **everything a member can do**: the device session, inbox and chat, profiles
+and profile editing, the grid and discovery, private albums and sharing, woofs and looks,
+favorites and folders, blocks and hides, moments, and Venture (events, cities, travel).
+
+Documented but **deliberately not implemented**:
+
+- Administrator surface — `trials/admin_*`, `boost/grant` ([§12](#12-membership-store-boost-client)).
+- Anti-fraud and onboarding — `face_liveness`, `sms/send`, `captcha`
+  ([§13](#13-verification-client)). These exist to establish that a human controls an
+  account, so driving them from an unofficial client is not a use this project supports.
+
+⚠️ Most **write** paths in this document are `[client]`, and the client has not sent them
+to the live API. See "Unexercised write surfaces" in [§15](#15-known-gaps).
+
+---
+
 ## 1. Transport
 
 ### 1.1 Hosts

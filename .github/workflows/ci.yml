@@ -139,6 +139,21 @@ jobs:
       - name: Scan full history
         run: gitleaks detect --no-banner --redact --exit-code 1
 
+  openapi:
+    name: openapi specs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The specs are hand-written, and YAML flow mappings make one mistake very
+      # easy to miss: an unquoted `description:` containing a comma ends at that
+      # comma, silently truncating the text and turning the remainder into bogus
+      # keys. Twelve descriptions in these files had done exactly that. Linting
+      # catches it; reading does not.
+      - name: Lint
+        working-directory: docs/openapi
+        run: npx --yes @redocly/cli@latest lint recon.yaml scruff.yaml
+
   docs:
     name: docs links
     runs-on: ubuntu-latest
