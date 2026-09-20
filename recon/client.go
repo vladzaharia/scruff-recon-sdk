@@ -144,3 +144,8 @@ func parseTime(s string) (time.Time, error) { return core.ParseTime(s) }
 
 // asError is errors.As with a friendlier name for the IsX helpers.
 func asError[T error](err error, target *T) bool { return errors.As(err, target) }
+
+// ParseTimestamp parses a Recon timestamp. Exported because callers routinely
+// need to turn a Message.CreatedDate or Conversation.LastActivityDate into a
+// time.Time, and the API's layouts are not all RFC 3339.
+func ParseTimestamp(s string) (time.Time, error) { return core.ParseTime(s) }
