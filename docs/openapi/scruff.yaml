@@ -1,0 +1,1058 @@
+openapi: 3.1.0
+
+info:
+  title: SCRUFF API (unofficial)
+  version: "8.16.0"
+  summary: Reverse-engineered specification for the SCRUFF app API.
+  description: |
+    Unofficial machine-readable specification for the SCRUFF API
+    (`com.appspot.scruffapp`). SCRUFF publishes no API and no documentation; this was
+    derived from the Android app and from traffic produced by the author's own account.
+
+    ## Scope
+
+    This document covers **authentication, inbox and chat, profiles, media, the profile
+    grid, and albums** — the endpoints with verified schemas. The full API is roughly 90
+    endpoints across 16 feature areas, including moments, venues, the store, and
+    verification; those are documented in prose in
+    [`../api/scruff.md`](../api/scruff.md) but are deliberately not modelled here.
+
+    ## Things this specification cannot express
+
+    - **The credential is a plain parameter, not a header.** `device_id` is
+      client-generated, bound once by `/app/account/connect`, and then sent on every
+      request forever. There is no token and no expiry.
+    - **Identity parameters move with the verb.** They are query parameters on GET and
+      DELETE, form fields on POST and PUT, and multipart parts on the chat send. OpenAPI
+      cannot express "these six parameters appear in whichever place this verb carries
+      parameters", so they are declared per operation.
+    - **`device_id` XOR `signature`** — a request carries one or the other, except
+      `/app/account/connect`, which carries both.
+    - **Errors have no body.** SCRUFF uses a custom 420–452 status vocabulary instead,
+      and the same code means different things on different endpoints.
+    - **Message `guid` case differs by direction**: outbound uppercase, inbound
+      lowercase. Compare case-insensitively.
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: beeper-connectors
+    url: https://github.com/vladzaharia/beeper-connectors
+
+externalDocs:
+  description: Prose reference, including everything not modelled here
+  url: https://github.com/vladzaharia/beeper-connectors/blob/main/docs/api/scruff.md
+
+servers:
+  - url: https://cdn-api.scruffapp.com
+    description: API host
+
+security:
+  - deviceId: []
+
+tags:
+  - name: account
+    description: Device session lifecycle.
+  - name: inbox
+    description: Conversation list.
+  - name: chat
+    description: Messages, media, typing, read state.
+  - name: profile
+    description: Member profiles.
+  - name: grid
+    description: Profile grids. One request shape, 23 paths.
+  - name: albums
+    description: Private albums.
+
+paths:
+  /app/account/register:
+    post:
+      tags: [account]
+      summary: Load or refresh the session
+      description: |
+        With a `device_id`, returns the full session: socket credentials, your profile,
+        CDN hosts, account tier, and feature flags.
+
+        **Without** a `device_id` — signed instead — it answers **401 with a usable
+        anonymous configuration payload**, not an error. That response is optional for
+        login but is how a client discovers the socket host before authenticating.
+
+        Call it again whenever you need fresh socket credentials; the app does so on
+        every foreground.
+      security:
+        - deviceId: []
+        - signature: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - $ref: '#/components/schemas/DeviceDescriptor'
+                - type: object
+                  properties:
+                    request_guid: { type: string }
+                    debug: { type: string, default: 'false' }
+                    remote_configs: { type: string, default: '{}' }
+      responses:
+        '200':
+          description: Full session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegisterResponse' }
+        '401':
+          description: |
+            Anonymous configuration payload — **not an error**. Returned when the request
+            carried no `device_id`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnonymousConfig' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/account/connect:
+    post:
+      tags: [account]
+      summary: Bind a device id to an account
+      description: |
+        The email and password gate, and the one call that breaks the
+        "`device_id` XOR `signature`" rule: it carries a client-generated `device_id`
+        **and** forces the signature block. Omitting the signature here fails.
+
+        **Returns 200 with an empty body.** There is no token to parse — success is the
+        status code alone, and the caller keeps the `device_id` it generated. Follow
+        immediately with `/app/account/register`.
+      security:
+        - deviceId: []
+          signature: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - $ref: '#/components/schemas/DeviceDescriptor'
+                - $ref: '#/components/schemas/SignatureParams'
+                - type: object
+                  required: [email, password]
+                  properties:
+                    email: { type: string, format: email }
+                    password: { type: string, format: password }
+                    refresh_token:
+                      type: string
+                      default: 'false'
+                      description: A slot; the literal string `false` when unused.
+                    login_token: { type: string, description: Alternative to password (magic link). }
+                    old_device_id:
+                      type: string
+                      description: Previous device id, for rotation. Often omitted.
+                    request_guid: { type: string }
+      responses:
+        '200':
+          description: Bound. Empty body, `text/html` content type.
+        '403':
+          description: Invalid password.
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/logout:
+    post:
+      tags: [account]
+      summary: End the server-side session
+      description: Clearing local state without calling this leaves the device session alive.
+      responses:
+        '200': { description: Logged out }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/inbox/stream:
+    get:
+      tags: [inbox]
+      summary: List conversations
+      description: |
+        Sorted by `action_at` descending. Omit `cutoff_timestamp` for the first page;
+        supply it — as unix seconds — to page backwards.
+
+        A conversation has **no id of its own**: each result's `id` is the peer's profile
+        id, which is what you pass to `/app/chat`.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - name: cutoff_timestamp
+          in: query
+          description: Unix seconds. The `action_at` of the oldest conversation held.
+          schema: { type: integer }
+        - name: limit
+          in: query
+          description: Omit to let the server choose — there is no client-side default.
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Conversations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboxPage' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/inbox/view:
+    post:
+      tags: [inbox]
+      summary: Clear unread badges
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [last_message_timestamp]
+                  properties:
+                    last_message_timestamp: { type: integer, description: Unix seconds. }
+                    request_guid: { type: string }
+      responses:
+        '200': { description: Cleared. Empty body. }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/inbox/thread:
+    delete:
+      tags: [inbox]
+      summary: Delete a conversation
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: profile_id, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Deleted }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/chat:
+    get:
+      tags: [chat]
+      summary: Fetch message history
+      description: |
+        Results **ascend by `version`**, which is a dense, gap-free per-conversation
+        sequence starting at 1 — it, not `id` and not `created_at`, is the ordering and
+        sync key.
+
+        Page backwards with `max_version`: the server returns messages strictly below it.
+        **A 404 means "no more messages"** and is the normal backfill terminator rather
+        than an error.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: profile_id, in: query, required: true, schema: { type: integer }, description: The peer — this is the conversation key. }
+        - { name: inbox_style, in: query, required: true, schema: { type: integer, const: 2 }, description: The app only ever sends 2. }
+        - { name: free_features, in: query, schema: { type: string, default: '[]' }, description: A JSON array literal. }
+        - { name: max_version, in: query, schema: { type: integer }, description: Backfill cursor. }
+        - { name: limit, in: query, schema: { type: integer } }
+      responses:
+        '200':
+          description: Messages, ascending by version
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatPage' }
+        '404':
+          description: No more messages — the normal end of backfill.
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+    post:
+      tags: [chat]
+      summary: Send a message
+      description: |
+        `multipart/mixed`, **not** `multipart/form-data` — note that many HTTP libraries'
+        form parsers will not read this.
+
+        Parts are emitted in a fixed order: `image`, `video`, `recipient`, `guid`,
+        `request_guid`, `message_type`, then the optional fields. `request_guid` equals
+        `guid` on a send.
+
+        Album sharing happens here, via `message_type: 12` carrying `shared_album_id` —
+        there is no separate permissions call in this protocol version.
+      requestBody:
+        required: true
+        content:
+          multipart/mixed:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [recipient, guid, message_type]
+                  properties:
+                    image: { type: string, format: binary }
+                    video: { type: string, format: binary }
+                    recipient: { type: integer }
+                    guid:
+                      type: string
+                      pattern: '^[0-9A-F]{32}$'
+                      description: Client-generated, UPPERCASE. Echoed back lowercase.
+                    request_guid: { type: string, description: Equal to `guid` on a send. }
+                    message_type: { $ref: '#/components/schemas/MessageType' }
+                    location: { type: string }
+                    reaction: { type: string, description: Emoji, for type 8. }
+                    reacted_to: { type: string, description: Target guid, for type 8. }
+                    message: { type: string }
+                    album_image_id: { type: string }
+                    video_filename: { type: string }
+                    mute: { type: string }
+                    media_behavior:
+                      type: integer
+                      enum: [0, 1]
+                      description: 0 normal, 1 single-view. Media messages only.
+                    'reply[guid]': { type: string }
+                    album_share_limit: { type: integer }
+                    shared_album_id: { type: integer }
+                    'reply[moment_id]': { type: integer }
+            encoding:
+              image: { contentType: image/jpg }
+              video: { contentType: application/octet-stream }
+      responses:
+        '200':
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: object
+                    properties:
+                      guid: { type: string }
+        '403': { description: The recipient has blocked you. }
+        '423': { description: Captcha required. }
+        '426': { description: Free-tier browsing limit reached. }
+        '431': { description: Spammy behaviour. }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+    put:
+      tags: [chat]
+      summary: Unsend or mark a message viewed
+      description: Two distinct operations selected by `unsent` or `viewed`.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [profile_id, guid]
+                  properties:
+                    profile_id: { type: integer }
+                    guid: { type: string }
+                    version: { type: integer }
+                    unsent: { type: boolean, description: Retract the message. }
+                    viewed: { type: boolean, description: Mark it read. }
+                    free_features: { type: string, default: '[]' }
+                    request_guid: { type: string }
+      responses:
+        '200': { description: Applied }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+    delete:
+      tags: [chat]
+      summary: Delete a thread
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: profile_id, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Deleted }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/chat/typing:
+    post:
+      tags: [chat]
+      summary: Publish a typing indicator
+      description: Send-only. The receive side arrives over the realtime channel as class 208.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [target_id]
+                  properties:
+                    target_id: { type: integer }
+                    request_guid: { type: string }
+      responses:
+        '200': { description: Sent. Empty body. }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/chat/message_viewed:
+    post:
+      tags: [chat]
+      summary: Report a message as read
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  properties:
+                    target_id: { type: integer }
+                    guid: { type: string }
+                    version: { type: integer }
+                    request_guid: { type: string }
+      responses:
+        '200': { description: Recorded }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/chat/media:
+    get:
+      tags: [chat]
+      summary: Mint a signed media URL
+      description: |
+        Returns a **CloudFront-signed, expiring** URL served from a rotating host. Use it
+        immediately and re-resolve on failure rather than caching.
+
+        For HLS video the `manifest_url` is an `.m3u8` whose segments require
+        `manifest_cookies` to be sent as cookies — downloading the manifest alone yields
+        a useless playlist.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: guid, in: query, required: true, schema: { type: string } }
+        - { name: message_type, in: query, required: true, schema: { $ref: '#/components/schemas/MessageType' } }
+        - { name: media_type, in: query, required: true, schema: { type: integer, enum: [0, 1] }, description: 0 image, 1 video. }
+        - { name: sender_id, in: query, required: true, schema: { type: integer } }
+        - { name: recipient_id, in: query, required: true, schema: { type: integer } }
+        - { name: version, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Signed URLs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: object
+                    properties:
+                      image_url: { type: string, format: uri }
+                      video_url: { type: string, format: uri }
+                      manifest_url: { type: string, format: uri }
+                      manifest_cookies:
+                        type: object
+                        additionalProperties: { type: string }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/socket/poll:
+    get:
+      tags: [chat]
+      summary: Catch-up poll for realtime events
+      description: |
+        Returns frames identical in schema to WebSocket frames, but **unencrypted** —
+        this is ordinary HTTPS JSON.
+
+        Only returns events **you caused**, matched by request guid. Unsolicited traffic
+        such as inbound messages has no request guid and never appears here.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - name: request_guids
+          in: query
+          required: true
+          description: A JSON array literal in one value, e.g. `["g1","g2"]`.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Frames
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/SocketFrame' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/profile:
+    get:
+      tags: [profile]
+      summary: Fetch a profile
+      description: |
+        The response wraps a **one-element array** under `results`.
+
+        Nullability is much wider on other people's profiles than on your own — `city`,
+        `ethnicity`, `about`, `height`, `hiv_status` and many others may be null, and
+        `created_at` was null on every observed foreign profile.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: target, in: query, required: true, schema: { type: integer } }
+        - { name: api_version, in: query, schema: { type: integer, default: 2 } }
+        - { name: latitude, in: query, schema: { type: string } }
+        - { name: longitude, in: query, schema: { type: string } }
+        - { name: thumbnail_constraint, in: query, schema: { type: string, default: '-thumbnail' } }
+        - { name: fullsize_constraint, in: query, schema: { type: string, default: '-fullsize' } }
+      responses:
+        '200':
+          description: A one-element array
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    maxItems: 1
+                    items: { $ref: '#/components/schemas/Profile' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/location:
+    get:
+      tags: [grid]
+      summary: The nearby profile grid
+      description: |
+        One of 23 paths sharing this exact request and response shape. The others include
+        `/app/woofs/incoming`, `/app/viewers/incoming`, `/app/favorite`, `/app/block`,
+        `/app/grid/matches_mutual`, `/app/albums/received`, and the Venture and Moments
+        grids. Anything you learn here applies to all of them.
+
+        Advance paging by the response's **`block_size`**, not by the `limit` you
+        requested, and echo `cache_id` to keep the result set stable.
+
+        Unrelated to `POST /app/location`, which publishes your position.
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: query_sort_type, in: query, required: true, schema: { type: integer, enum: [0, 1, 2, 3] }, description: 0 distance, 1 time, 2 online, 3 distance+newness. }
+        - { name: offset, in: query, required: true, schema: { type: integer } }
+        - { name: latitude, in: query, required: true, schema: { type: string } }
+        - { name: longitude, in: query, required: true, schema: { type: string } }
+        - { name: location_provider, in: query, required: true, schema: { type: string, default: unknown } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: cache_id, in: query, schema: { type: string }, description: Echo from the previous page. }
+      responses:
+        '200':
+          description: One page of profiles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GridPage' }
+        '402': { description: Payment required — past the free-tier cap. }
+        '426': { description: No profiles. }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+    post:
+      tags: [profile]
+      summary: Publish your position
+      description: Unrelated to the GET on this path, which is the nearby grid.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/IdentityParams'
+                - type: object
+                  required: [latitude, longitude]
+                  properties:
+                    latitude: { type: string }
+                    longitude: { type: string }
+                    speed: { type: number, default: 0 }
+                    provider: { type: string, default: fused }
+                    request_guid: { type: string }
+      responses:
+        '200': { description: Recorded }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/albums:
+    get:
+      tags: [albums]
+      summary: List albums
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: target_id, in: query, schema: { type: integer }, description: Omit for your own. }
+        - { name: exclude_private_album, in: query, schema: { type: string } }
+        - { name: exclude_recent_album, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Albums
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/Album' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/albums/images:
+    get:
+      tags: [albums]
+      summary: Fetch album contents
+      description: |
+        URLs are CloudFront-signed with a **wildcard covering every rendition** of each
+        image, and they expire.
+
+        Note the parameter name is `full_size_constraints[]` (with an underscore) while
+        the response field is `fullsize_url` (without).
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: album_id, in: query, schema: { type: integer } }
+        - { name: target_id, in: query, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - name: 'full_size_constraints[]'
+          in: query
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+        - name: 'thumbnail_constraints[]'
+          in: query
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+      responses:
+        '200':
+          description: Album contents
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AlbumContents' }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+  /app/albums/cover_image:
+    get:
+      tags: [albums]
+      summary: Fetch a signed cover image URL
+      parameters:
+        - $ref: '#/components/parameters/identityQuery'
+        - { name: album_id, in: query, required: true, schema: { type: integer } }
+        - { name: album_version, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Signed URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  signed_url: { type: string, format: uri }
+                  album_version: { type: string }
+        default: { $ref: '#/components/responses/StatusOnlyError' }
+
+components:
+  securitySchemes:
+    deviceId:
+      type: apiKey
+      in: query
+      name: device_id
+      description: |
+        The entire credential: `droid-` plus 40 hex characters, client-generated and
+        bound to the account by `/app/account/connect`. It never expires.
+
+        Declared here as a query parameter because that is where it goes on GET and
+        DELETE; on POST and PUT it is a **form field**, and on the chat send a
+        **multipart part**. Treat it as a long-lived bearer token — leaking it is
+        equivalent to leaking the password.
+    signature:
+      type: apiKey
+      in: query
+      name: signature
+      description: |
+        HMAC-SHA256, used **instead of** `device_id` before one exists.
+
+            base      = "<longitude>~<latitude>~<client_version>~<device_type>"
+            key       = UTF-8 bytes of base
+            message   = base + ":" + timestamp
+            signature = lowercase hex
+
+        The key and the message prefix are the same string. `timestamp` is decimal
+        seconds with six fraction digits.
+
+        The third component is **`client_version`** — several public write-ups say
+        `device_id`, which produces a signature the server rejects.
+
+  parameters:
+    identityQuery:
+      name: identity
+      in: query
+      required: true
+      description: |
+        Shorthand for the six identity parameters every authenticated call carries:
+        `device_id`, `hardware_id`, `client_version`, `client_semver`, `flavor`,
+        `device_type`. On GET and DELETE they are query parameters; on POST and PUT they
+        are form fields.
+      schema: { $ref: '#/components/schemas/IdentityParams' }
+      style: form
+      explode: true
+
+  responses:
+    StatusOnlyError:
+      description: |
+        **There is no error body.** A rejected request has `Content-Length: 0`. SCRUFF
+        instead overloads the 4xx range with application-specific meanings, and the same
+        code means different things on different endpoints.
+
+        420 too many profiles · 421 deleted too recently · 422 email in use ·
+        423 captcha required · 424 invalid name · 425 unknown location · 426 no profiles ·
+        427 invalid email · 428 age restriction · 429 rate limited · 430 banned terms ·
+        431 spammy · 432 SMS validation required · 433 upgrade required ·
+        434 previously flagged · 435 feature disabled · 436 receipt error · 437 offline ·
+        438 jailed · 439 suspended · 440 carrier not allowed · 441 country mismatch ·
+        442 association restricted · 443 too many deliveries · 444 too many devices ·
+        445 too many sends to region · 446 too many SMS validations · 447 bad token ·
+        448 invalid product · 449 invalid offer · 450 payment provider error ·
+        451 age verification required · 452 liveness check required.
+
+        Three endpoints are exceptions and do return a body: `430` banned terms,
+        `406` max hashtags, and the `401` from anonymous register.
+
+  schemas:
+    IdentityParams:
+      type: object
+      description: Carried by every authenticated request, in whichever place the verb uses.
+      required: [hardware_id, client_version, client_semver, flavor, device_type]
+      properties:
+        device_id: { type: string, pattern: '^droid-[0-9a-f]{40}$' }
+        hardware_id: { type: string }
+        client_version:
+          type: string
+          const: '8.1600'
+          description: The packed form of the semver, `sprintf("%d.%02d%02d")`.
+        client_semver: { type: string, const: '8.16.0' }
+        flavor: { type: string, enum: ['1', '2', '3'], description: 1 SCRUFF, 2 Jack'd, 3 GROWLr. }
+        device_type: { type: string, enum: ['0', '1', '2', '3', '4'], description: 2 is Android. }
+
+    SignatureParams:
+      type: object
+      required: [signature, timestamp, latitude, longitude]
+      properties:
+        signature: { type: string, pattern: '^[0-9a-f]{64}$' }
+        timestamp:
+          type: string
+          pattern: '^\d+\.\d{6}$'
+          description: Decimal seconds with six fraction digits, not an integer.
+        latitude: { type: string, description: '"0.0" when unknown.' }
+        longitude: { type: string, description: '"0.0" when unknown.' }
+        location_provider: { type: string, default: unknown }
+
+    DeviceDescriptor:
+      type: object
+      description: Sent on register, connect, and forgot.
+      properties:
+        aes256_key:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: Client-generated; keys the realtime stream. Cannot change later.
+        aes256_iv: { type: string, pattern: '^[0-9a-f]{32}$' }
+        system_name: { type: string }
+        device_name: { type: string }
+        device_os_version: { type: string }
+        system_version: { type: string }
+        locale: { type: string, default: en-US }
+        build: { type: string, const: '169074' }
+        user_agent: { type: string, description: A device string sent as a FIELD, not the HTTP header. }
+        register_count: { type: integer }
+        register_count_for_version: { type: integer }
+        latitude: { type: string }
+        longitude: { type: string }
+        location_provider: { type: string }
+        domain_fronting_enabled: { type: string }
+        domain_fronting_host: { type: string }
+
+    RegisterResponse:
+      type: object
+      description: 21 top-level keys; the ones a client needs are modelled here.
+      properties:
+        socket: { $ref: '#/components/schemas/SocketInfo' }
+        profile: { $ref: '#/components/schemas/Profile' }
+        now: { type: string, description: An RFC 1123 HTTP date, not a unix integer. }
+        cdn: { type: string, format: uri }
+        profile_cdn: { type: string, format: uri }
+        app_cdn: { type: string, format: uri }
+        album_image_cdn: { type: string, format: uri }
+        account_tier: { $ref: '#/components/schemas/AccountTier' }
+        device_settings:
+          type: string
+          description: A JSON-encoded STRING, not an object. Decode it twice.
+        indicators:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              last: { type: string }
+              viewed: { type: string }
+        favorite_folders:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              creator_id: { type: integer }
+              folder_type: { type: [integer, 'null'] }
+              name: { type: string }
+        features:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              name: { type: string }
+              data: { type: [object, 'null'] }
+              enabled: { type: boolean }
+        stripe_public_key: { type: string }
+        gdpr: { type: boolean }
+        kisa: { type: boolean }
+        explicit_content_law: { type: boolean }
+        travel_alert_warning: { type: boolean }
+        review_prompt_eligible: { type: boolean }
+        store_items: { type: object }
+        boost: { type: object }
+        current_event: { type: object }
+
+    AnonymousConfig:
+      type: object
+      description: The body of the 401 returned when register carries no device id.
+      properties:
+        socket: { $ref: '#/components/schemas/SocketInfo' }
+        now: { type: string }
+        cdn: { type: string }
+        app_cdn: { type: string }
+        album_image_cdn: { type: string }
+        suggested_email:
+          type: string
+          description: |
+            ⚠️ The device's Google account address, returned to an unauthenticated
+            caller. Do not log it.
+        new_onboarding: { type: boolean }
+        gdpr: { type: boolean }
+        kisa: { type: boolean }
+        explicit_content_law: { type: boolean }
+        features: { type: array, items: { type: object } }
+        current_event: { type: object }
+
+    SocketInfo:
+      type: object
+      properties:
+        host: { type: string, description: A CloudFront edge; it rotates. }
+        port: { type: integer, default: 443 }
+        pwd: { type: string, description: The realtime `X-Token-Auth`. Rotates on each register. }
+
+    AccountTier:
+      type: object
+      properties:
+        tier: { type: string, enum: [free, pro] }
+        pro_type:
+          type: [object, 'null']
+          properties:
+            type: { type: string, enum: [free_trial, paid_subscription, pro_pass] }
+            activated_at: { type: string }
+            expires_at: { type: string }
+            auto_renew: { type: boolean }
+            store_id: { type: string, enum: [apple, google_play, admin, free_trial, stripe] }
+
+    MessageType:
+      type: integer
+      enum: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]
+      description: |
+        0 unset, 1 text, 2 image, 3 video, 4 location, 5 emoji, 6 gif, 7 HLS video,
+        8 reaction, 9 typing, 12 album. 10 and 11 are absent from this build.
+
+    Message:
+      type: object
+      properties:
+        id: { type: integer }
+        sender_id: { type: integer }
+        recipient_id: { type: integer }
+        guid:
+          type: string
+          description: |
+            The dedup key. **Outbound UPPERCASE, inbound lowercase** — compare
+            case-insensitively or you will duplicate your own sent messages.
+        version:
+          type: integer
+          description: |
+            A dense, gap-free per-conversation sequence starting at 1. This, not `id`, is
+            the ordering and sync key.
+        message_type: { $ref: '#/components/schemas/MessageType' }
+        created_at: { type: string, description: An RFC 1123 HTTP date. }
+        message:
+          description: Text for type 1; a JSON blob for type 8; absent for media.
+          oneOf:
+            - { type: string }
+            - { type: object }
+        unread: { type: boolean, description: Inbox previews only. }
+        reply:
+          type: [object, 'null']
+          properties:
+            guid: { type: string, description: A message reply. }
+            moment_id: { type: integer, description: A Moment reply. }
+            moment_result:
+              type: object
+              properties:
+                image_url: { type: string }
+                media_type: { type: integer }
+        fullsize_width: { type: integer }
+        fullsize_height: { type: integer }
+        media_behavior: { type: integer, enum: [0, 1] }
+        album_id: { type: integer }
+        is_album_shared: { type: boolean }
+        album_blurhash: { type: string }
+        album_version: { type: string }
+        sender:
+          $ref: '#/components/schemas/Profile'
+          description: Present only on realtime deliveries.
+
+    ChatPage:
+      type: object
+      properties:
+        profile_id: { type: integer }
+        results:
+          type: array
+          description: Ascending by version.
+          items: { $ref: '#/components/schemas/Message' }
+        min_version: { type: integer, description: 0 when the full history is available. }
+        min_version_free: { type: integer, description: The free-tier floor for this page. }
+        max_read_version:
+          type: integer
+          description: A message is read by the peer iff its version is at or below this.
+        disable_read_receipts: { type: boolean }
+
+    Profile:
+      type: object
+      description: Grid endpoints return a subset; treat every field as optional.
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string }
+        logged_in: { type: boolean }
+        online: { type: boolean }
+        recent: { type: boolean }
+        last_login: { type: string }
+        dst: { type: number, description: Distance in metres. }
+        has_image: { type: integer, description: A photo VERSION, not a boolean. }
+        album_images: { type: integer }
+        flavors: { type: array, items: { type: integer } }
+        face_pic: { type: boolean }
+        traveling: { type: boolean }
+        new_member: { type: boolean }
+        hide_distance: { type: boolean }
+        disable_read_receipts: { type: boolean }
+        album_shared_to: { type: boolean }
+        album_shared_from: { type: boolean }
+        unread: { type: integer, description: Present only when greater than zero. }
+        action_at: { type: string, description: Sort key and paging cursor. }
+        profile_photos:
+          type: array
+          items: { $ref: '#/components/schemas/ProfilePhoto' }
+        about: { type: [string, 'null'] }
+        city: { type: [string, 'null'] }
+        age_in_years: { type: integer }
+        height: { type: [number, 'null'], description: Centimetres. }
+        weight_kg: { type: [number, 'null'] }
+        ethnicity: { type: [integer, 'null'] }
+        relationship_status: { type: [integer, 'null'] }
+        hiv_status: { type: [integer, 'null'] }
+        community: { type: array, items: { type: integer } }
+        sex_preferences: { type: array, items: { type: integer } }
+
+    ProfilePhoto:
+      type: object
+      properties:
+        thumbnail_key: { type: string, description: Append to the profile CDN host. Unsigned. }
+        fullsize_key: { type: string }
+        version: { type: integer }
+        crop_source: { type: integer, enum: [0, 1, 2] }
+        verified_status: { type: integer, enum: [0, 1, 2] }
+        moderation_state: { type: integer, enum: [-2, -1, 0, 1, 2] }
+        violation: { type: integer }
+        created_at: { type: string }
+        x_center_offset_pct: { type: number }
+        y_center_offset_pct: { type: number }
+        height_pct: { type: number }
+
+    InboxPage:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/Profile'
+              - type: object
+                properties:
+                  messages:
+                    type: array
+                    description: A preview of the latest one or two messages.
+                    items: { $ref: '#/components/schemas/Message' }
+        max: { type: integer }
+        max_free: { type: integer }
+        offset: { type: integer }
+        block_size: { type: integer }
+        count: { type: integer }
+        timestamp: { type: integer }
+
+    GridPage:
+      type: object
+      description: The envelope shared by all 23 grids.
+      properties:
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/Profile' }
+        max: { type: integer, description: Total available to this account. }
+        max_free: { type: integer, description: The free-tier paging cap. }
+        offset: { type: integer }
+        count: { type: integer }
+        block_size:
+          type: integer
+          description: The page size the SERVER chose. Advance offset by this.
+        cache_id:
+          type: string
+          description: Echo on the next page to keep the result set stable.
+        buckets:
+          type: object
+          description: A histogram; keys are bucket indices as strings.
+        ui_components: { type: object, description: Server-driven UI; ignorable. }
+
+    Album:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        album_type: { type: integer, enum: [0, 1, 2, 3, 4] }
+        count: { type: integer }
+        is_album_shared: { type: boolean }
+        album_version: { type: string }
+        is_default: { type: boolean }
+        profile: { $ref: '#/components/schemas/Profile' }
+
+    AlbumImage:
+      type: object
+      properties:
+        id: { type: integer }
+        guid: { type: string }
+        album_id: { type: integer }
+        media_type: { type: integer, enum: [0, 1, 2, 3, 4, 5] }
+        caption: { type: [string, 'null'] }
+        sort_order: { type: integer }
+        fullsize_url: { type: string, format: uri, description: Signed and expiring. }
+        thumbnail_url: { type: string, format: uri }
+        video_url: { type: string, format: uri }
+        manifest_url: { type: string, format: uri }
+        fullsize_width: { type: integer }
+        fullsize_height: { type: integer }
+        manifest_cookies:
+          type: object
+          additionalProperties: { type: string }
+
+    AlbumContents:
+      type: object
+      properties:
+        album_id: { type: integer }
+        album: { $ref: '#/components/schemas/Album' }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/AlbumImage' }
+        offset: { type: integer }
+        block_size: { type: integer }
+
+    SocketFrame:
+      type: object
+      description: |
+        Identical in schema to a realtime WebSocket frame — except that frames from the
+        socket are AES-encrypted and these are not.
+      properties:
+        class: { type: integer, description: The event discriminator; 87 codes exist. }
+        id: { type: string }
+        request_guid: { type: [string, 'null'], description: Null for unsolicited events. }
+        timestamp: { type: integer }
+        backlog: { type: integer, description: 0 means live. }
+        results: { type: [object, 'null'] }

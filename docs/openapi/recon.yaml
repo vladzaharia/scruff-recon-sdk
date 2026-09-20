@@ -1,0 +1,1180 @@
+openapi: 3.1.0
+
+info:
+  title: Recon API (unofficial)
+  version: "1.7.31"
+  summary: Reverse-engineered specification for the Recon v3 API.
+  description: |
+    Unofficial machine-readable specification for the [recon.com](https://www.recon.com)
+    v3 API. Recon publishes no API and no documentation; this was derived from the public
+    Angular web client and from traffic produced by the author's own account.
+
+    ## Scope
+
+    This document covers the **authentication, messaging, profile, media, and read-only
+    discovery** surface — the endpoints a client actually needs, and the ones with
+    verified schemas. The full API is considerably larger (18 services, ~179 call sites,
+    including payments, events, verification and moderation); those are documented in
+    prose in [`../api/recon.md`](../api/recon.md) but are deliberately not modelled here,
+    because specifying request bodies that have never been exercised would imply more
+    confidence than is warranted.
+
+    ## Traps this specification cannot express
+
+    - `accessToken` is returned **already prefixed with `"Bearer "`**. Re-adding the
+      prefix yields `Bearer Bearer`, which the *profile* service accepts and the
+      *messaging* and *SignalR* services reject with an empty-body 401.
+    - `applicationId` must be the **integer 3**, not a UUID.
+    - The `totalRecords` field on message history is the size of the **returned page**,
+      not the conversation total.
+    - `participants[]` on a conversation **excludes you**.
+    - The realtime channel uses different field names for the same concepts
+      (`profileId`/`messageText` instead of `senderProfileId`/`text`). It is not REST and
+      is documented in [`../api/recon-realtime.md`](../api/recon-realtime.md).
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: beeper-connectors
+    url: https://github.com/vladzaharia/beeper-connectors
+
+externalDocs:
+  description: Prose reference, including everything not modelled here
+  url: https://github.com/vladzaharia/beeper-connectors/blob/main/docs/api/recon.md
+
+servers:
+  - url: https://www.recon.com/api
+    description: API gateway
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: account
+    description: Authentication, app installation, and server settings.
+  - name: messaging
+    description: Conversations and messages. All paths are keyed by your profile id.
+  - name: profile
+    description: Member profiles and the attribute lookup tables.
+  - name: profileSearch
+    description: The nearby and explore grid.
+  - name: profileRelations
+    description: Blocks, cruises, visits.
+  - name: feed
+    description: Notifications.
+  - name: media
+    description: Galleries.
+
+paths:
+  /account/appInstallations:
+    post:
+      tags: [account]
+      security: []
+      summary: Register an app installation
+      description: |
+        Must be called before authenticating; the returned `id` is required by
+        `/account/accounts/authenticate`.
+
+        **`applicationId` must be the integer `3`.** Sending a UUID makes the server
+        reject the entire request model.
+      parameters:
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AppInstallationRequest' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location:
+              schema: { type: string }
+              description: "`/appInstallations/{id}`"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppInstallation' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /account/accounts/authenticate:
+    post:
+      tags: [account]
+      security: []
+      summary: Authenticate with email and password
+      parameters:
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthenticateRequest' }
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenSet' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /account/accounts/{accountId}/sessions/{sessionId}/refreshTokens:
+    post:
+      tags: [account]
+      security: []
+      summary: Exchange a refresh token for a new token set
+      description: |
+        Sent **without** an `Authorization` header — the web client's auth interceptor
+        explicitly skips any URL containing `/refreshTokens`.
+
+        Derived from the web client, not from observed traffic: the captured session
+        re-authenticated rather than refreshing, so this path has never been seen on the
+        wire.
+      parameters:
+        - $ref: '#/components/parameters/accountId'
+        - $ref: '#/components/parameters/sessionId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: Refreshed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenSet' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /account/accounts/{accountId}/sessions/{sessionId}:
+    delete:
+      tags: [account]
+      summary: Log out
+      description: Discarding tokens locally leaves the server session alive; call this to end it.
+      parameters:
+        - $ref: '#/components/parameters/accountId'
+        - $ref: '#/components/parameters/sessionId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '204': { description: Session ended }
+        default: { $ref: '#/components/responses/Error' }
+
+  /account/appSettings:
+    get:
+      tags: [account]
+      security: []
+      summary: Server settings and limits
+      description: |
+        The authoritative source of every server-side limit. Fetch this rather than
+        hardcoding: the real caps (1000-character messages, 50 MiB uploads, 10
+        attachments) differ from what is commonly assumed.
+      parameters:
+        - $ref: '#/components/parameters/culture'
+        - $ref: '#/components/parameters/deviceTypeId'
+      responses:
+        '200':
+          description: Settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppSettings' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /account/accounts/{accountId}/appSettings:
+    get:
+      tags: [account]
+      summary: Account-scoped server settings
+      description: Same schema as the anonymous form, personalised to the account.
+      parameters:
+        - $ref: '#/components/parameters/accountId'
+        - $ref: '#/components/parameters/culture'
+        - $ref: '#/components/parameters/deviceTypeId'
+      responses:
+        '200':
+          description: Settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppSettings' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/conversations:
+    get:
+      tags: [messaging]
+      summary: List conversations
+      description: |
+        Not paginated — one observed account returned all 873 threads in a single
+        188 kB response.
+
+        Supplying `profileId` and `otherProfileId` as query parameters instead turns this
+        into a 1:1 lookup; an empty `data` array then means "no conversation yet", which
+        is not an error.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+        - name: isHidden
+          in: query
+          schema: { type: boolean, default: false }
+        - name: profileId
+          in: query
+          description: Your own profile id, for the 1:1 lookup form.
+          schema: { type: string, format: uuid }
+        - name: otherProfileId
+          in: query
+          description: The peer's profile id, for the 1:1 lookup form.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Conversation' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+    post:
+      tags: [messaging]
+      summary: Create a 1:1 conversation
+      description: |
+        If the conversation already exists the server responds with a conflict or a
+        redirect plus a `Location` header; follow it.
+
+        Note the **PascalCase `ProfileId`** inside `participants` — this and
+        `LastMessageReadDate` are the only two non-camelCase bodies in the entire API.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateConversationRequest' }
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversation' }
+        '409':
+          description: Already exists
+          headers:
+            Location:
+              schema: { type: string }
+              description: Follow this to the existing conversation.
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/conversations/{conversationId}:
+    get:
+      tags: [messaging]
+      summary: Fetch one conversation
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/conversationId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Conversation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversation' }
+        default: { $ref: '#/components/responses/Error' }
+
+    delete:
+      tags: [messaging]
+      summary: Delete a conversation
+      description: Recon has no per-message delete; only whole threads and individual attachments.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/conversationId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '204': { description: Deleted }
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/conversations/{conversationId}/content:
+    get:
+      tags: [messaging]
+      summary: Fetch message history
+      description: |
+        Results are ordered **newest first**.
+
+        Pagination is a **`before` cursor holding the ISO `createdDate` of the oldest
+        message you already hold** — not an id, not an offset. An empty `data` array
+        means the start of the conversation.
+
+        `totalRecords` here is the size of the returned page, **not** the conversation
+        total. Do not use it for paging arithmetic.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/conversationId'
+        - $ref: '#/components/parameters/culture'
+        - name: take
+          in: query
+          description: Page size. The web client uses 20.
+          schema: { type: integer, default: 20 }
+        - name: before
+          in: query
+          description: The `createdDate` of the oldest message already held.
+          schema: { type: string, format: date-time }
+        - $ref: '#/components/parameters/imageSizes'
+      responses:
+        '200':
+          description: Messages, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Message' }
+                  totalRecords:
+                    type: integer
+                    description: Size of THIS page, not the conversation total.
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/conversations/{conversationId}/messages:
+    post:
+      tags: [messaging]
+      summary: Send a message
+      description: |
+        Three forms exist.
+
+        **Text** — JSON with `files` and `attachments` always present as empty arrays,
+        never omitted. There is no `contentTypeId` in the request; the server assigns it.
+
+        **Inline media** — `multipart/form-data` with a `text` field, an `attachments`
+        field holding a **JSON-encoded string array** (usually `[]`), and a **repeated
+        `files` part**, one per binary. This is the path the web client uses for images
+        and GIFs.
+
+        **By reference** — JSON using `attachmentIds` for media already uploaded to the
+        media service.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/conversationId'
+        - $ref: '#/components/parameters/culture'
+        - $ref: '#/components/parameters/imageSizes'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/SendTextRequest'
+                - $ref: '#/components/schemas/SendByReferenceRequest'
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                text: { type: string }
+                attachments:
+                  type: string
+                  description: A JSON-encoded array of media ids, e.g. `[]`.
+                  default: '[]'
+                files:
+                  type: array
+                  description: Repeated part, one per binary.
+                  items: { type: string, format: binary }
+            encoding:
+              files:
+                contentType: image/jpeg, image/png, image/gif, image/bmp
+      responses:
+        '200':
+          description: Sent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/conversations/{conversationId}/messages/{messageId}:
+    get:
+      tags: [messaging]
+      summary: Fetch one message
+      description: |
+        Used to hydrate a realtime notification, whose payload omits attachments and
+        reports only an `attachmentCount`.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/conversationId'
+        - name: messageId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/culture'
+        - $ref: '#/components/parameters/imageSizes'
+      responses:
+        '200':
+          description: Message
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/conversations/{conversationId}/logMessagesRead:
+    post:
+      tags: [messaging]
+      summary: Advance the read watermark
+      description: Note the **PascalCase** body key.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/conversationId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [LastMessageReadDate]
+              properties:
+                LastMessageReadDate: { type: string, format: date-time }
+      responses:
+        '204': { description: Recorded }
+        default: { $ref: '#/components/responses/Error' }
+
+  /messaging/profiles/{profileId}/recentAttachments:
+    get:
+      tags: [messaging]
+      summary: Recently sent attachments
+      description: |
+        URLs here point at the authenticated gateway rather than the public CDN — chat
+        media is auth-gated. Note the lowercase `nocache` parameter, which differs from
+        the `noCache` used elsewhere.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+        - $ref: '#/components/parameters/imageSizes'
+        - name: nocache
+          in: query
+          schema: { type: integer, description: Epoch milliseconds. }
+      responses:
+        '200':
+          description: Attachments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Attachment' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profile/profiles/{profileId}/{version}:
+    get:
+      tags: [profile]
+      summary: Fetch a profile
+      description: |
+        The trailing path segment is the **profile version**, not an image size.
+        Requesting version `1` returns `302` to the current version, so `/1` is the
+        idiomatic "give me current" — follow redirects.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - name: version
+          in: path
+          required: true
+          description: Profile version, or `1` to be redirected to the current one.
+          schema: { type: integer }
+        - $ref: '#/components/parameters/culture'
+        - $ref: '#/components/parameters/imageSizes'
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '302':
+          description: Redirect to the current version
+          headers:
+            Location: { schema: { type: string } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profile/{table}:
+    get:
+      tags: [profile]
+      summary: Fetch a profile attribute lookup table
+      description: |
+        Cacheable for 24 hours. Prefer fetching over hardcoding: the interest id space in
+        particular is **sparse** — about a third of the range is retired — so assuming a
+        contiguous range is wrong.
+
+        `validHeightsCm` is the exception: its `data` is a bare integer array.
+      parameters:
+        - name: table
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [ethnicities, positions, bodytypes, bodyhairs, safesexes, roles, interests, validHeightsCm]
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Lookup values
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      oneOf:
+                        - $ref: '#/components/schemas/LookupValue'
+                        - type: integer
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileSearch/profiles:
+    get:
+      tags: [profileSearch]
+      summary: Search profiles
+      description: |
+        Two properties make this endpoint unusual.
+
+        **It is not paginated.** There is no `skip`, `take`, or cursor — the server
+        returns the entire result set and the web client slices locally.
+
+        **Results are stubs.** To render anything you must fetch each `profileUrl`
+        individually, a two-phase fetch. The profile version is the last path segment of
+        `profileUrl`.
+
+        Several filters are premium-only and are nulled client-side for free accounts.
+      parameters:
+        - $ref: '#/components/parameters/culture'
+        - { name: myProfileId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: sortProperty, in: query, required: true, schema: { type: string, enum: [distance] } }
+        - { name: name, in: query, schema: { type: string } }
+        - { name: ageMin, in: query, schema: { type: integer } }
+        - { name: ageMax, in: query, schema: { type: integer } }
+        - { name: heightCmMin, in: query, schema: { type: integer }, description: Premium only. }
+        - { name: heightCmMax, in: query, schema: { type: integer }, description: Premium only. }
+        - { name: latitude, in: query, schema: { type: number } }
+        - { name: longitude, in: query, schema: { type: number } }
+        - { name: radiusMetres, in: query, schema: { type: integer } }
+        - { name: activeWithinMinutes, in: query, schema: { type: integer, default: 43200 } }
+        - { name: joinedWithinDays, in: query, schema: { type: integer } }
+        - { name: isPremium, in: query, schema: { type: boolean }, description: Premium only. }
+        - { name: hasVisibleImages, in: query, schema: { type: boolean }, description: Premium only. }
+        - { name: isExplore, in: query, schema: { type: boolean } }
+        - { name: positionIds, in: query, schema: { type: string }, description: Comma-separated ids. }
+        - { name: roleIds, in: query, schema: { type: string } }
+        - { name: interestIds, in: query, schema: { type: string } }
+        - { name: safeSexIds, in: query, schema: { type: string } }
+        - { name: bodyTypeIds, in: query, schema: { type: string }, description: Premium only. }
+        - { name: bodyHairIds, in: query, schema: { type: string }, description: Premium only. }
+        - { name: ethnicityIds, in: query, schema: { type: string }, description: Premium only. }
+      responses:
+        '200':
+          description: Search result stubs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/SearchResult' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileSearch/profiles/{profileId}/defaultFilters:
+    get:
+      tags: [profileSearch]
+      summary: Fetch saved search filters
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Filters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchFilters' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      tags: [profileSearch]
+      summary: Save search filters
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SearchFilters' }
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SearchFilters' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/blocked:
+    get:
+      tags: [profileRelations]
+      summary: List blocked profiles
+      description: The only relations list that embeds a display name.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Blocked profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RelationEntry' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/{relation}:
+    get:
+      tags: [profileRelations]
+      summary: List a relation
+      description: Not paginated. One observed account returned 113 records in one response.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - name: relation
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [cruisedProfiles, cruisedByProfiles, visitorProfiles]
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Relation entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mostRecentDate: { type: string, format: date-time }
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RelationEntry' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /profileRelations/profiles/{profileId}/{relation}/count:
+    get:
+      tags: [profileRelations]
+      summary: Relation counters
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - name: relation
+          in: path
+          required: true
+          schema: { type: string, enum: [cruisedByProfiles, visitorProfiles] }
+        - $ref: '#/components/parameters/culture'
+      responses:
+        '200':
+          description: Counters
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RelationCounts' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /feed/profiles/{profileId}/feeds/notifications:
+    get:
+      tags: [feed]
+      summary: List notifications
+      description: |
+        Returns stubs; dereference `feedItemUrl` for the rendered copy. The server
+        supplies the text, so a client does not need per-type strings.
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+        - { name: noCache, in: query, schema: { type: boolean } }
+      responses:
+        '200':
+          description: Notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/FeedItem' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /media/profiles/{profileId}/galleries:
+    get:
+      tags: [media]
+      summary: List galleries
+      parameters:
+        - $ref: '#/components/parameters/profileId'
+        - $ref: '#/components/parameters/culture'
+        - $ref: '#/components/parameters/deviceTypeId'
+        - $ref: '#/components/parameters/imageSizes'
+        - name: sortProperty
+          in: query
+          description: "`2` = upload date newest first; `3` = curated gallery position."
+          schema: { type: integer, enum: [2, 3], default: 2 }
+        - { name: includeRestricted, in: query, schema: { type: boolean } }
+        - { name: noCache, in: query, schema: { type: boolean } }
+      responses:
+        '200':
+          description: Galleries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Gallery' }
+                  totalRecords: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        `Authorization: Bearer <jwt>`.
+
+        The `accessToken` returned by authenticate and refresh is **already prefixed**
+        with `"Bearer "`. Strip it and add exactly one, or you produce `Bearer Bearer`,
+        which the profile service accepts and messaging and SignalR reject with an
+        empty-body 401.
+
+  parameters:
+    culture:
+      name: culture
+      in: query
+      required: true
+      description: Required on every request.
+      schema: { type: string, enum: [en, fr, es, de, pt], default: en }
+    deviceTypeId:
+      name: deviceTypeId
+      in: query
+      schema: { type: integer, enum: [0, 1, 2, 3, 4], default: 1 }
+      description: "0 Unknown, 1 Web, 2 iOS, 3 Android Play, 4 Android X."
+    imageSizes:
+      name: imageSizes
+      in: query
+      description: |
+        Comma-separated rendition codes. **Only 100–104 exist.** One `files[]` entry is
+        returned per code requested.
+      schema: { type: string, examples: ['100,104', '102,104'] }
+    profileId:
+      name: profileId
+      in: path
+      required: true
+      description: Your active profile id. All messaging is keyed by this.
+      schema: { type: string, format: uuid }
+    conversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    accountId:
+      name: accountId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    sessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Error:
+      description: |
+        RFC 7807 ProblemDetails plus Recon's own members. Note `t101ErrorCode` appears
+        both nested under `extensions` and promoted to the top level.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ProblemDetails' }
+
+  schemas:
+    ProblemDetails:
+      type: object
+      description: The standard members are frequently `null`; `title` is the useful one.
+      properties:
+        type: { type: [string, 'null'] }
+        title: { type: [string, 'null'], description: The only human-readable prose. }
+        status: { type: [integer, 'null'] }
+        detail: { type: [string, 'null'] }
+        instance: { type: [string, 'null'] }
+        link: { type: [string, 'null'], description: A Recon addition. }
+        t101ErrorCode:
+          type: [integer, 'null']
+          description: |
+            Recon's numeric code, in the form `AAA000BBB`. Also present under
+            `extensions`. Meanings are context-dependent — the same code appears with
+            different titles on different endpoints.
+        extensions:
+          type: [object, 'null']
+          properties:
+            t101ErrorCode: { type: integer }
+        errors:
+          type: [object, 'null']
+          description: ASP.NET ModelState dictionary, on validation failures.
+          additionalProperties:
+            type: array
+            items: { type: string }
+      examples:
+        - type: null
+          title: Invalid GUID parameter.
+          status: 404
+          detail: null
+          instance: null
+          link: null
+          extensions: { t101ErrorCode: 901000001 }
+          t101ErrorCode: 901000001
+
+    AppInstallationRequest:
+      type: object
+      required: [applicationId, deviceTypeId, appVersion, userAgent]
+      properties:
+        applicationId:
+          type: integer
+          const: 3
+          description: Must be the integer 3. A UUID is rejected.
+        deviceTypeId: { type: integer, default: 1 }
+        appVersion: { type: string, examples: ['1.7.31'] }
+        userAgent:
+          type: string
+          description: Truncated to 255 characters and recorded as the device description.
+        description: { type: string }
+        isInstalledPwa: { type: boolean, default: false }
+
+    AppInstallation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        createdDate: { type: string, format: date-time }
+        lastUsedDate: { type: string, format: date-time }
+        applicationId: { type: integer }
+        deviceTypeId: { type: integer }
+        appVersion: { type: string }
+        userAgent: { type: string }
+        description: { type: string }
+        isInstalledPwa: { type: boolean }
+
+    AuthenticateRequest:
+      type: object
+      required: [emailAddress, password, deviceTypeId, appVersion, userAgent, appInstallationId]
+      properties:
+        emailAddress: { type: string, format: email }
+        password: { type: string, format: password }
+        deviceTypeId: { type: integer, default: 1 }
+        appVersion: { type: string }
+        userAgent: { type: string }
+        appInstallationId: { type: string, format: uuid }
+
+    TokenSet:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: "⚠️ ALREADY prefixed with `Bearer `. Strip before use."
+          examples: ['Bearer eyJhbGciOiJSUzI1NiIs…']
+        accessTokenExpiry: { type: string, format: date-time, description: 15 minutes out. }
+        refreshToken: { type: string }
+        refreshTokenExpiry: { type: string, format: date-time, description: 14 days out. }
+        accountId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        profileIds:
+          type: array
+          description: One account may own several; exactly one is active.
+          items: { type: string, format: uuid }
+        membershipLevelId: { type: integer, description: "0 free, ≥1 premium." }
+        signalRToken:
+          type: string
+          description: Returned but unused — realtime authenticates with the access token.
+        roles: { type: array, items: { type: string } }
+        mfaEnabled: { type: boolean }
+
+    AppSettings:
+      type: object
+      properties:
+        environment: { type: string }
+        ttlMinutes: { type: integer }
+        enabledFeatures:
+          type: object
+          properties:
+            geolocation: { type: boolean }
+            pushNotification: { type: boolean }
+            recaptcha: { type: boolean }
+        limits: { $ref: '#/components/schemas/Limits' }
+        supportedLanguages: { type: array, items: { type: string } }
+        isAdminMfaRequired: { type: boolean }
+
+    Limits:
+      type: object
+      properties:
+        interests: { type: integer, examples: [10] }
+        blocks: { type: integer, examples: [50] }
+        friends: { type: integer, examples: [500] }
+        following: { type: integer, examples: [500] }
+        minImageResolution: { type: integer, examples: [400] }
+        minPasswordLength: { type: integer, examples: [8] }
+        minimumZxcvbnScore: { type: integer, examples: [3] }
+        maxFileSizeBytes: { type: integer, examples: [52428800] }
+        maxFileAttachments: { type: integer, examples: [10] }
+        allowedFileExtensions: { type: array, items: { type: string } }
+        allowedMediaMimeTypes: { type: array, items: { type: string } }
+        maxMessageLength: { type: integer, examples: [1000] }
+        minAge: { type: integer, examples: [18] }
+        maxSearchAge: { type: integer, examples: [99] }
+        visitRetentionPeriodDays: { type: integer }
+        cruiseRetentionPeriodDays: { type: integer }
+        standardMemberVisitDisplayPeriodDays: { type: integer }
+        standardMemberCruiseDisplayPeriodDays: { type: integer }
+        cruiseMinUpdatePeriodDays: { type: integer }
+        maximumFilesPerProfile: { type: integer }
+        maximumFilesInMainGallery: { type: integer }
+        maximumUploadsInBatch: { type: integer }
+
+    Conversation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: [string, 'null'], description: Null for 1:1 threads. }
+        isGroup: { type: boolean }
+        isOfficial: { type: boolean }
+        isArchived: { type: boolean }
+        isReadOnly: { type: boolean, description: True exactly for official threads. }
+        thumbnailMediaMetadataId: { type: string }
+        thumbnailUrl: { type: [string, 'null'] }
+        lastActivityDate: { type: string, format: date-time }
+        participantCount: { type: integer }
+        participants:
+          type: array
+          description: "⚠️ EXCLUDES you — length is participantCount − 1."
+          items:
+            type: object
+            properties:
+              profileId: { type: string, format: uuid }
+              profileUrl: { type: string }
+        createdDate: { type: string, format: date-time }
+        lastMessageExcerpt: { type: string }
+        contentUrl: { type: string }
+        participantsUrl: { type: string }
+        userInfo:
+          type: object
+          properties:
+            isFlagged: { type: boolean }
+            unreadMessageCount: { type: integer }
+
+    CreateConversationRequest:
+      type: object
+      required: [participants]
+      properties:
+        participants:
+          type: array
+          description: Both you and the peer. Note the PascalCase key.
+          items:
+            type: object
+            properties:
+              ProfileId: { type: string, format: uuid }
+        isGroup: { type: boolean, default: false }
+        isOfficial: { type: boolean, default: false }
+        isArchived: { type: boolean, default: false }
+
+    Message:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        senderProfileId:
+          type: string
+          format: uuid
+          description: "⚠️ The realtime channel calls this `profileId`."
+        text:
+          type: string
+          description: "⚠️ The realtime channel calls this `messageText`."
+        isFlagged: { type: boolean }
+        isRead: { type: boolean }
+        displayAsHtml: { type: boolean }
+        markupTypeId:
+          type: [integer, 'null']
+          description: |
+            Honoured only on official threads: 1 Markdown, 2 raw HTML. Any other value
+            renders nothing in the web client.
+        createdDate: { type: string, format: date-time }
+        contentTypeId:
+          type: integer
+          description: |
+            The real wire field (1 = text). The web client reads a `messageType`
+            property that no server response contains.
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/Attachment' }
+        files:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFile' }
+
+    SendTextRequest:
+      type: object
+      required: [text, files, attachments]
+      properties:
+        text: { type: string, maxLength: 1000 }
+        files: { type: array, items: { type: string }, description: Always present, usually empty. }
+        attachments: { type: array, items: { type: string }, description: Always present, usually empty. }
+
+    SendByReferenceRequest:
+      type: object
+      required: [text, files, attachmentIds]
+      properties:
+        text: { type: string }
+        files: { type: array, items: { type: string } }
+        attachmentIds:
+          type: array
+          description: Media already uploaded to the media service. Note the key differs from `attachments`.
+          items: { type: string, format: uuid }
+
+    Attachment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        mediaMetadataId: { type: string, format: uuid }
+        thumbnailUrl: { type: string }
+        files:
+          type: array
+          description: Ordered small to large.
+          items: { $ref: '#/components/schemas/MediaFile' }
+        downloadUrl: { type: string }
+        isRestricted: { type: boolean }
+
+    MediaFile:
+      type: object
+      properties:
+        imageSize: { type: integer, enum: [100, 101, 102, 103, 104] }
+        url: { type: string, format: uri, description: Absolute. Use verbatim. }
+
+    Profile:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, description: Monotonic; also the ETag. }
+        name: { type: string }
+        detailUrl: { type: [string, 'null'], description: Dereference for the long bio. }
+        primaryImageFiles:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFile' }
+        membershipLevelId: { type: integer }
+        dateOfBirth: { type: 'null', description: Never exposed. }
+        age: { type: integer }
+        heightCm: { type: [integer, 'null'] }
+        shortText: { type: [string, 'null'] }
+        longText: { type: [string, 'null'], description: Null here; lives on detailUrl. }
+        ethnicityId: { type: [integer, 'null'] }
+        positionId: { type: [integer, 'null'] }
+        bodyTypeId: { type: [integer, 'null'] }
+        bodyHairId: { type: [integer, 'null'] }
+        safeSexId: { type: [integer, 'null'] }
+        roleId: { type: [integer, 'null'] }
+        location:
+          type: [object, 'null']
+          properties:
+            locationId: { type: integer }
+            locationUrl: { type: string }
+        lastUpdatedDate: { type: string, format: date-time }
+        interests: { type: array, items: { type: integer }, maxItems: 10 }
+        createdDate: { type: string, format: date-time }
+        isPublic: { type: boolean }
+        isOfficial: { type: boolean }
+        rowVersion: { type: 'null', description: Null on read; required on PATCH. }
+
+    LookupValue:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string, description: Localised by `culture`. }
+
+    SearchResult:
+      type: object
+      description: A stub. Dereference `profileUrl` to render anything.
+      properties:
+        profileId: { type: string, format: uuid }
+        profileUrl:
+          type: string
+          description: Ends in the profile version, which is how a client recovers it.
+        distanceMetres: { type: integer }
+        date: { type: string, format: date-time }
+
+    SearchFilters:
+      type: object
+      description: Every scalar is nullable; null means "no filter".
+      properties:
+        distanceSliderIndex: { type: [integer, 'null'], description: Client-side only; never sent to search. }
+        ageMin: { type: [integer, 'null'] }
+        ageMax: { type: [integer, 'null'] }
+        isPremium: { type: [boolean, 'null'] }
+        isNewMember: { type: [boolean, 'null'], description: Client-side only; becomes joinedWithinDays. }
+        isOnlineNow: { type: [boolean, 'null'], description: Client-side only; becomes activeWithinMinutes. }
+        hasVisibleImages: { type: [boolean, 'null'] }
+        heightCmMin: { type: [integer, 'null'] }
+        heightCmMax: { type: [integer, 'null'] }
+        positionIds: { type: array, items: { type: integer } }
+        interestIds: { type: array, items: { type: integer } }
+        bodyTypeIds: { type: array, items: { type: integer } }
+        bodyHairIds: { type: array, items: { type: integer } }
+        ethnicityIds: { type: array, items: { type: integer } }
+        safeSexIds: { type: array, items: { type: integer } }
+        roleIds: { type: array, items: { type: integer } }
+
+    RelationEntry:
+      type: object
+      properties:
+        date: { type: string, format: date-time }
+        profileId: { type: string, format: uuid }
+        profileUrl: { type: string }
+        profileName: { type: string, description: Present on the block list only. }
+
+    RelationCounts:
+      type: object
+      properties:
+        withinStandardDisplayPeriod: { type: integer, description: 7-day window. }
+        withinPremiumDisplayPeriod: { type: integer, description: 30-day window. }
+        sinceLastViewed: { type: integer }
+
+    FeedItem:
+      type: object
+      properties:
+        feedItemId: { type: string, description: Numeric, but a string. }
+        feedItemUrl: { type: string }
+        profileUrl: { type: string, description: May carry a stale version segment. }
+        isSelfActor: { type: boolean }
+        actionDate: { type: string, format: date-time }
+        isRead: { type: boolean }
+        feedItemTypeId: { type: integer, minimum: 1, maximum: 24 }
+
+    Gallery:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        entityId: { type: string }
+        imageCount: { type: integer }
+        coverImageId: { type: string }
+        coverImageFiles:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFile' }
+        url: { type: string }
+        galleryType:
+          type: object
+          properties:
+            id: { type: integer, minimum: 1, maximum: 11 }
+            name: { type: string }
+            isRestricted: { type: boolean }
