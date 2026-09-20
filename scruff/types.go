@@ -47,6 +47,9 @@ type Session struct {
 	HardwareID string `json:"hardware_id,omitempty"`
 	// ProfileID is your own profile id.
 	ProfileID string `json:"profile_id,omitempty"`
+	// ProfileName is your own display name, as returned by register. Carried
+	// on the session so a caller can label the account without a second call.
+	ProfileName string `json:"profile_name,omitempty"`
 
 	// AES256Key and AES256IV are client-generated and key the realtime stream.
 	// They are registered with the server at login and cannot change afterwards

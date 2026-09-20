@@ -329,7 +329,7 @@ func (c *Client) ResolveMedia(ctx context.Context, id string) (core.MediaRef, er
 
 // Profile fetches a member profile.
 func (c *Client) Profile(ctx context.Context, profileID string) (*Profile, error) {
-	lat, lon, _ := latLngStrings(c.cfg.location)
+	lat, lon, _ := latLngStrings(c.cfg.loc())
 	q := url.Values{
 		"target":               {profileID},
 		"latitude":             {lat},
@@ -396,7 +396,7 @@ type GridOptions struct {
 // Pass one of the Grid* constants as path. Advance by the response's BlockSize
 // rather than by the limit you asked for, and echo CacheID on the next call.
 func (c *Client) Grid(ctx context.Context, path string, opt GridOptions) (*GridPage, error) {
-	lat, lon, provider := latLngStrings(c.cfg.location)
+	lat, lon, provider := latLngStrings(c.cfg.loc())
 	q := url.Values{
 		"query_sort_type":   {strconv.Itoa(opt.Sort)},
 		"offset":            {strconv.Itoa(opt.Offset)},

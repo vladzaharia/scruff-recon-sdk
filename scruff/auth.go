@@ -128,7 +128,7 @@ func (a *authenticator) Authorize(ctx context.Context, r *core.Request) error {
 	} else {
 		// No device id yet: sign instead. A request carries one or the other,
 		// never both — except account/connect, which forces both explicitly.
-		signInto(r, a.c.cfg.location, time.Now())
+		signInto(r, a.c.cfg.loc(), time.Now())
 	}
 	// Every non-GET carries an idempotency key.
 	switch r.Method {
@@ -192,7 +192,7 @@ func BootstrapRegister(ctx context.Context, opts ...Option) (*RegisterResponse, 
 	c := newClientWith(Session{HardwareID: NewHardwareID()}, cfg)
 
 	var out RegisterResponse
-	err := c.tr.JSON(ctx, registerRequest(Session{}, cfg.location), &out)
+	err := c.tr.JSON(ctx, registerRequest(Session{}, cfg.loc()), &out)
 	if err != nil {
 		// A 401 here carries the anonymous payload rather than an error.
 		if e, ok := core.AsAPIError(err); ok && e.IsUnauthorized() && out.Socket.Host != "" {
@@ -260,7 +260,7 @@ func connect(ctx context.Context, cfg config, s Session, creds Credentials) erro
 	r.SetForm("email", creds.Email)
 	r.SetForm("password", creds.Password)
 	r.SetForm("refresh_token", "false")
-	addRegisterParams(r, s, cfg.location)
+	addRegisterParams(r, s, cfg.loc())
 	// Force the signature even though a device id is present. Omitting it here
 	// fails; this is the single exception to the XOR rule.
 	signInto(r, cfg.location, time.Now())
@@ -301,3 +301,11 @@ func ImportSession(ctx context.Context, s Session, opts ...Option) (Session, err
 	}
 	return c.Session(), nil
 }
+
+// SignRequest computes the request signature.
+//
+// Exported so that callers replacing their own implementation can assert the
+// base string has not drifted — getting the third component wrong (device_id
+// instead of client_version) yields a signature the server rejects, and the
+// failure mode is an opaque empty-bodied rejection.
+func SignRequest(lat, lon, timestamp string) string { return signRequest(lat, lon, timestamp) }

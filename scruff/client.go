@@ -24,11 +24,25 @@ var (
 )
 
 type config struct {
-	http      core.Doer
-	baseURL   string
-	userAgent string
-	limiter   *core.Limiter
-	location  LatLng
+	http       core.Doer
+	baseURL    string
+	userAgent  string
+	limiter    *core.Limiter
+	location   LatLng
+	locationFn func() LatLng
+}
+
+// loc resolves the coordinates to use for this request.
+//
+// A provider is consulted per call rather than per client, because callers
+// whose position changes at runtime would otherwise have to rebuild the client
+// — and the coordinates feed the request signature, so a stale value is worse
+// than no value.
+func (c config) loc() LatLng {
+	if c.locationFn != nil {
+		return c.locationFn()
+	}
+	return c.location
 }
 
 // Option configures a Client.
@@ -48,6 +62,13 @@ func WithUserAgent(ua string) Option { return func(c *config) { c.userAgent = ua
 // location-aware endpoints. Without it, "0.0" is sent — which the app also does
 // when it has no fix, but which makes several endpoints return 400.
 func WithLocation(loc LatLng) Option { return func(c *config) { c.location = loc } }
+
+// WithLocationProvider supplies coordinates dynamically, consulted on every
+// request that needs them. Use this instead of WithLocation when the position
+// can change while the client is alive.
+func WithLocationProvider(fn func() LatLng) Option {
+	return func(c *config) { c.locationFn = fn }
+}
 
 // WithRateLimit overrides the client-side limiter.
 func WithRateLimit(l *core.Limiter) Option { return func(c *config) { c.limiter = l } }
@@ -137,13 +158,16 @@ func (c *Client) ProfileID() string { return c.store.Get().ProfileID }
 // is saved through OnSessionUpdate.
 func (c *Client) Register(ctx context.Context) (*RegisterResponse, error) {
 	var out RegisterResponse
-	if err := c.tr.JSON(ctx, registerRequest(c.store.Get(), c.cfg.location), &out); err != nil {
+	if err := c.tr.JSON(ctx, registerRequest(c.store.Get(), c.cfg.loc()), &out); err != nil {
 		return nil, err
 	}
 
 	s := c.store.Get()
 	if id := out.Profile.ID.String(); id != "" && id != "0" {
 		s.ProfileID = id
+	}
+	if out.Profile.Name != "" {
+		s.ProfileName = out.Profile.Name
 	}
 	s.SocketHost, s.SocketPort, s.SocketPwd = out.Socket.Host, out.Socket.Port, out.Socket.Pwd
 	// Prefer the server's CDN hosts over the constants.
@@ -212,3 +236,8 @@ func (c *Client) AvatarURL(p Profile) string {
 
 // parseTime parses SCRUFF's HTTP-date timestamps.
 func parseTime(s string) (time.Time, error) { return core.ParseTime(s) }
+
+// ParseTimestamp parses a Scruff timestamp. Exported because callers routinely
+// need to turn a Message.CreatedAt or Conversation.ActionAt into a time.Time,
+// and these are RFC 1123 HTTP dates rather than ISO 8601.
+func ParseTimestamp(s string) (time.Time, error) { return core.ParseTime(s) }
